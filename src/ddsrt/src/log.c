@@ -255,7 +255,15 @@ static void vlog1 (const struct ddsrt_log_cfg_impl *cfg, uint32_t cat, uint32_t 
     }
   }
 
+  /* nano-ros: zephyr eager-flush — Phase 11W.7. Flush every vlog
+   * call so the registered sink sees every fragment, not only
+   * messages ending in '\n'. Required on Zephyr so init-time
+   * aborts surface a diagnostic before the panic. */
+#ifdef __ZEPHYR__
+  if (lb->pos > BUF_OFFSET) {
+#else
   if (fmt[strlen (fmt) - 1] == '\n' && lb->pos > BUF_OFFSET + 1) {
+#endif
     assert (lb->pos > BUF_OFFSET);
     size_t hdrsize = print_header (lb->buf, domid);
 

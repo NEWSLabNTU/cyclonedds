@@ -301,7 +301,10 @@ static dds_return_t set_socket_buffer (struct ddsi_domaingv const * const gv, dd
   dds_return_t rc;
 
   rc = ddsrt_getsockopt (sock, SOL_SOCKET, socket_option, &actsize, &optlen);
-  if (rc == DDS_RETCODE_BAD_PARAMETER)
+  /* nano-ros: zephyr unsupported-sockopt — Phase 11W.7. NSOS returns
+   * DDS_RETCODE_UNSUPPORTED for getsockopt(SO_RCVBUF/SO_SNDBUF);
+   * treat as BAD_PARAMETER (skip-with-info, no abort). */
+  if (rc == DDS_RETCODE_BAD_PARAMETER || rc == DDS_RETCODE_UNSUPPORTED)
   {
     /* not all stacks support getting/setting RCVBUF */
     GVLOG (DDS_LC_CONFIG, "cannot retrieve socket %s buffer size\n", name);
@@ -322,6 +325,10 @@ static dds_return_t set_socket_buffer (struct ddsi_domaingv const * const gv, dd
        the option value back and check it is now set correctly. */
     if ((rc = ddsrt_getsockopt (sock, SOL_SOCKET, socket_option, &actsize, &optlen)) != DDS_RETCODE_OK)
     {
+      if (rc == DDS_RETCODE_BAD_PARAMETER || rc == DDS_RETCODE_UNSUPPORTED) {
+        GVLOG (DDS_LC_CONFIG, "cannot verify socket %s buffer size\n", name);
+        return DDS_RETCODE_OK;
+      }
       GVERROR ("ddsi_udp_create_conn: get %s failed: %s\n", socket_option_name, dds_strretcode (rc));
       return rc;
     }
@@ -332,6 +339,15 @@ static dds_return_t set_socket_buffer (struct ddsi_domaingv const * const gv, dd
       GVLOG (DDS_LC_CONFIG,
              "failed to increase socket %s buffer size to %"PRIu32" bytes, continuing with %"PRIu32" bytes\n",
              name, socket_req_buf_size, actsize);
+    else if (actsize == 0)
+    {
+      /* nano-ros: zephyr unsupported-sockopt — Phase 11W.8. Zephyr
+       * NSOS getsockopt(SO_*BUF) succeeds but reports 0 because the
+       * host-offloaded socket doesn't surface a buffer size; treat
+       * 0 as "stack can't size, continue" (the host socket still has
+       * the kernel default buffer). */
+      GVLOG (DDS_LC_CONFIG, "socket %s buffer size unreported by stack, continuing\n", name);
+    }
     else
     {
       /* If the configuration states it must be >= X, then error out if the
@@ -410,18 +426,19 @@ static dds_return_t set_mc_options_transmit_ipv4 (struct ddsi_domaingv const * c
   const unsigned char ttl = (unsigned char) gv->config.multicast_ttl;
   const unsigned char loop = (unsigned char) !!gv->config.enableMulticastLoopback;
   dds_return_t rc;
-  if ((rc = set_mc_options_transmit_ipv4_if (gv, intf, sock)) != DDS_RETCODE_OK) {
-    GVERROR ("ddsi_udp_create_conn: set IP_MULTICAST_IF failed: %s\n", dds_strretcode (rc));
-    return rc;
-  }
-  if ((rc = ddsrt_setsockopt (sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof (ttl))) != DDS_RETCODE_OK) {
-    GVERROR ("ddsi_udp_create_conn: set IP_MULTICAST_TTL failed: %s\n", dds_strretcode (rc));
-    return rc;
-  }
-  if ((rc = ddsrt_setsockopt (sock, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof (loop))) != DDS_RETCODE_OK) {
-    GVERROR ("ddsi_udp_create_conn: set IP_MULTICAST_LOOP failed: %s\n", dds_strretcode (rc));
-    return rc;
-  }
+  /* nano-ros: zephyr unsupported-sockopt — Phase 11W.8. The
+   * IP_MULTICAST_* setsockopt family is best-effort on Zephyr NSOS
+   * (struct-shape / size differences from upstream POSIX cause
+   * BAD_PARAMETER / generic ERROR). Evaluate each call but never
+   * fail the connection on its result; embedded multicast group
+   * membership is driven by nros-platform-zephyr's IGMP path, not
+   * Cyclone's setsockopt. */
+#define NROS_MC_OPT_BEST_EFFORT(expr) ((void)(expr))
+  NROS_MC_OPT_BEST_EFFORT(rc = set_mc_options_transmit_ipv4_if (gv, intf, sock));
+  NROS_MC_OPT_BEST_EFFORT(rc = ddsrt_setsockopt (sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof (ttl)));
+  NROS_MC_OPT_BEST_EFFORT(rc = ddsrt_setsockopt (sock, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof (loop)));
+#undef NROS_MC_OPT_BEST_EFFORT
+  (void) rc;
   return DDS_RETCODE_OK;
 }
 

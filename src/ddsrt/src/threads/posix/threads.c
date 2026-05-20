@@ -12,6 +12,17 @@
 
 /* _GNU_SOURCE is required for pthread_getname_np and pthread_setname_np. */
 #define _GNU_SOURCE
+
+/* nano-ros: zephyr k_thread_custom_data override gate — Phase 11W.6 */
+#ifdef __ZEPHYR__
+#define _NROS_CYC_THREADS_OVERRIDE 1
+/* Phase 11W.8 — Zephyr asserts on sigprocmask() in a multi-threaded
+ * context (lib/posix/options/signal.c) and wants pthread_sigmask().
+ * Cyclone blocks signals around pthread_create so worker threads
+ * inherit a blocked mask; the two calls have identical signatures,
+ * so redirect them to the pthread variant. */
+#define sigprocmask pthread_sigmask
+#endif
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
@@ -521,6 +532,7 @@ static void thread_init(void)
   (void)pthread_once(&thread_once, &thread_init_once);
 }
 
+#ifndef _NROS_CYC_THREADS_OVERRIDE
 dds_return_t ddsrt_thread_cleanup_push (void (*routine) (void *), void *arg)
 {
   int err;
@@ -542,7 +554,9 @@ dds_return_t ddsrt_thread_cleanup_push (void (*routine) (void *), void *arg)
   }
   return DDS_RETCODE_OUT_OF_RESOURCES;
 }
+#endif
 
+#ifndef _NROS_CYC_THREADS_OVERRIDE
 dds_return_t ddsrt_thread_cleanup_pop (int execute)
 {
   int err;
@@ -561,6 +575,7 @@ dds_return_t ddsrt_thread_cleanup_pop (int execute)
   }
   return DDS_RETCODE_OK;
 }
+#endif
 
 static void thread_cleanup_fini(void *arg)
 {
@@ -579,12 +594,15 @@ static void thread_cleanup_fini(void *arg)
      nullified if invoked as destructor, i.e. not from ddsrt_thread_fini. */
 }
 
+#ifndef _NROS_CYC_THREADS_OVERRIDE
 void ddsrt_thread_init(uint32_t reason)
 {
   (void)reason;
   thread_init();
 }
+#endif
 
+#ifndef _NROS_CYC_THREADS_OVERRIDE
 void ddsrt_thread_fini(uint32_t reason)
 {
   thread_cleanup_t *tail;
@@ -596,3 +614,76 @@ void ddsrt_thread_fini(uint32_t reason)
     (void)pthread_setspecific(thread_cleanup_key, NULL);
   }
 }
+#endif
+
+
+/* nano-ros: zephyr k_thread_custom_data override — Phase 11W.6.
+ * Replaces the pthread-key-based TLS used by the 4 functions above
+ * (gated out via _NROS_CYC_THREADS_OVERRIDE) with Zephyr's per-thread
+ * `void *` slot. Active only when the target builds under Zephyr
+ * (__ZEPHYR__ defined by the kernel's autoconf). On any other host
+ * (Linux / macOS / FreeBSD POSIX) the original pthread path stays
+ * as-is. */
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+#include "dds/ddsrt/heap.h"
+
+typedef struct _nros_cyc_cleanup {
+    void (*routine)(void *);
+    void *arg;
+    struct _nros_cyc_cleanup *prev;
+} _nros_cyc_cleanup_t;
+
+static inline _nros_cyc_cleanup_t *_nros_cyc_head(void) {
+    return (_nros_cyc_cleanup_t *)k_thread_custom_data_get();
+}
+
+static inline void _nros_cyc_head_set(_nros_cyc_cleanup_t *h) {
+    k_thread_custom_data_set(h);
+}
+
+dds_return_t ddsrt_thread_cleanup_push(void (*routine)(void *), void *arg) {
+    if (routine == NULL) {
+        return DDS_RETCODE_BAD_PARAMETER;
+    }
+    _nros_cyc_cleanup_t *node = ddsrt_calloc(1, sizeof(*node));
+    if (node == NULL) {
+        return DDS_RETCODE_OUT_OF_RESOURCES;
+    }
+    node->routine = routine;
+    node->arg = arg;
+    node->prev = _nros_cyc_head();
+    _nros_cyc_head_set(node);
+    return DDS_RETCODE_OK;
+}
+
+dds_return_t ddsrt_thread_cleanup_pop(int execute) {
+    _nros_cyc_cleanup_t *head = _nros_cyc_head();
+    if (head == NULL) {
+        return DDS_RETCODE_OK;
+    }
+    _nros_cyc_head_set(head->prev);
+    if (execute) {
+        head->routine(head->arg);
+    }
+    ddsrt_free(head);
+    return DDS_RETCODE_OK;
+}
+
+void ddsrt_thread_init(uint32_t reason) {
+    (void)reason;
+}
+
+void ddsrt_thread_fini(uint32_t reason) {
+    (void)reason;
+    _nros_cyc_cleanup_t *cur = _nros_cyc_head();
+    while (cur != NULL) {
+        _nros_cyc_cleanup_t *prev = cur->prev;
+        cur->routine(cur->arg);
+        ddsrt_free(cur);
+        cur = prev;
+    }
+    _nros_cyc_head_set(NULL);
+}
+
+#endif /* __ZEPHYR__ */
