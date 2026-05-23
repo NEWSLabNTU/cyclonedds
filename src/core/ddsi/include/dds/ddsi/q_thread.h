@@ -134,6 +134,12 @@ extern ddsrt_thread_local struct thread_state *tsd_thread_state;
 extern DDS_EXPORT ddsrt_thread_local struct thread_state *tsd_thread_state;
 #endif
 
+#if DDSRT_WITH_FREERTOS
+#define DDSI_THREAD_STATE_USE_TSD 0
+#else
+#define DDSI_THREAD_STATE_USE_TSD 1
+#endif
+
 
 DDS_EXPORT void thread_states_init (void);
 DDS_EXPORT bool thread_states_fini (void);
@@ -146,10 +152,12 @@ DDS_EXPORT dds_return_t join_thread (struct thread_state *thrst);
 DDS_EXPORT void log_stack_traces (const struct ddsrt_log_cfg *logcfg, const struct ddsi_domaingv *gv);
 
 DDS_INLINE_EXPORT inline struct thread_state *lookup_thread_state (void) {
+#if DDSI_THREAD_STATE_USE_TSD
   struct thread_state *thrst = tsd_thread_state;
   if (thrst)
     return thrst;
   else
+#endif
     return lookup_thread_state_real ();
 }
 

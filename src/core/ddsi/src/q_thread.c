@@ -111,11 +111,13 @@ void thread_states_init (void)
      in the past.  Also, allocate a slot for this thread if it didn't have one yet
      (not strictly required, but it'll get one eventually anyway, and this makes
      it rather more clear). */
-#ifndef NDEBUG
+#if !defined(NDEBUG) && DDSI_THREAD_STATE_USE_TSD
   struct thread_state * const ts0 = tsd_thread_state;
 #endif
   struct thread_state * const thrst = lookup_thread_state_real ();
+#if DDSI_THREAD_STATE_USE_TSD
   assert (ts0 == NULL || ts0 == thrst);
+#endif
   (void) thrst;
 }
 
@@ -127,7 +129,9 @@ bool thread_states_fini (void)
   struct thread_state *thrst = lookup_thread_state ();
   assert (vtime_asleep_p (ddsrt_atomic_ld32 (&thrst->vtime)));
   reap_thread_state (thrst, true);
+#if DDSI_THREAD_STATE_USE_TSD
   tsd_thread_state = NULL;
+#endif
 
   /* Some applications threads that, at some point, required a thread state, may still be around.
      Of those, the cleanup routine is invoked when the thread terminates.  This should be rewritten
@@ -231,6 +235,7 @@ static struct thread_state *lazy_create_thread_state (ddsrt_thread_t self)
 
 struct thread_state *lookup_thread_state_real (void)
 {
+#if DDSI_THREAD_STATE_USE_TSD
   struct thread_state *thrst = tsd_thread_state;
   if (thrst == NULL)
   {
@@ -239,6 +244,12 @@ struct thread_state *lookup_thread_state_real (void)
       thrst = lazy_create_thread_state (self);
     tsd_thread_state = thrst;
   }
+#else
+  ddsrt_thread_t self = ddsrt_thread_self ();
+  struct thread_state *thrst = find_thread_state (self);
+  if (thrst == NULL)
+    thrst = lazy_create_thread_state (self);
+#endif
   assert (thrst != NULL);
   return thrst;
 }
@@ -250,7 +261,9 @@ static uint32_t create_thread_wrapper (void *ptr)
   if (gv)
     GVTRACE ("started new thread %"PRIdTID": %s\n", ddsrt_gettid (), thrst->name);
   assert (thrst->state == THREAD_STATE_INIT);
+#if DDSI_THREAD_STATE_USE_TSD
   tsd_thread_state = thrst;
+#endif
   ddsrt_mutex_lock (&thread_states.lock);
   thrst->state = THREAD_STATE_ALIVE;
   ddsrt_mutex_unlock (&thread_states.lock);
@@ -258,7 +271,9 @@ static uint32_t create_thread_wrapper (void *ptr)
   ddsrt_mutex_lock (&thread_states.lock);
   thrst->state = THREAD_STATE_STOPPED;
   ddsrt_mutex_unlock (&thread_states.lock);
+#if DDSI_THREAD_STATE_USE_TSD
   tsd_thread_state = NULL;
+#endif
   return ret;
 }
 
@@ -434,4 +449,3 @@ void log_stack_traces (const struct ddsrt_log_cfg *logcfg, const struct ddsi_dom
     }
   }
 }
-

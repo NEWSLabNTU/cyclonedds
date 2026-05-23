@@ -22,7 +22,12 @@
 #include <string.h>
 #include "dds/ddsrt/heap.h"
 
-static const size_t ofst = sizeof(size_t);
+/*
+ * FreeRTOS heap_4 returns portBYTE_ALIGNMENT-aligned blocks. Keep the
+ * ddsrt size header inside an equally aligned prefix so the pointer
+ * returned to Cyclone still satisfies malloc's alignment contract.
+ */
+static const size_t ofst = portBYTE_ALIGNMENT;
 
 void *ddsrt_malloc_s(size_t size)
 {
@@ -40,7 +45,7 @@ void *ddsrt_malloc_s(size_t size)
       errno = ENOMEM;
     } else {
       *((size_t *)ptr) = size;
-      ptr += ofst;
+      ptr = (unsigned char *) ptr + ofst;
     }
   }
 
@@ -70,7 +75,9 @@ void *ddsrt_calloc_s(size_t nmemb, size_t size)
     errno = ERANGE;
   } else {
     ptr = ddsrt_malloc_s(nmemb * size);
-    (void)memset(ptr, 0, nmemb * size);
+    if (ptr != NULL) {
+      (void)memset(ptr, 0, nmemb * size);
+    }
   }
 
   return ptr;
@@ -98,7 +105,7 @@ void *ddsrt_realloc_s(void *memblk, size_t size)
   size_t origsize = 0;
 
   if (memblk != NULL) {
-    origsize = *((size_t *)(memblk - ofst));
+    origsize = *((size_t *)((unsigned char *) memblk - ofst));
   }
 
   if (size != origsize || origsize == 0) {
@@ -109,7 +116,7 @@ void *ddsrt_realloc_s(void *memblk, size_t size)
       if (size > 0) {
         (void)memcpy(ptr, memblk, size > origsize ? origsize : size);
       }
-      vPortFree(memblk - ofst);
+      vPortFree((unsigned char *) memblk - ofst);
     }
     memblk = ptr;
   }
@@ -132,6 +139,6 @@ void
 ddsrt_free(void *ptr)
 {
   if (ptr != NULL) {
-    vPortFree(ptr - ofst);
+    vPortFree((unsigned char *) ptr - ofst);
   }
 }

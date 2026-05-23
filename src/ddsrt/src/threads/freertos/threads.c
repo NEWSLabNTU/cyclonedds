@@ -62,7 +62,9 @@ typedef struct {
   size_t len;
 } thread_registry_t;
 
+#if !DDSRT_WITH_FREERTOS
 static ddsrt_thread_local thread_context_t *thread_context = NULL;
+#endif
 
 static thread_registry_t thread_registry;
 
@@ -183,8 +185,29 @@ static dds_return_t
 thread_context_acquire(thread_context_t **ctxptr)
 {
   dds_return_t rc = DDS_RETCODE_OK;
+#if DDSRT_WITH_FREERTOS
+  thread_context_t *ctx = NULL;
+#else
   thread_context_t *ctx = thread_context;
+#endif
 
+#if DDSRT_WITH_FREERTOS
+  ddsrt_once(&thread_registry_once, &thread_registry_init);
+  ddsrt_mutex_lock(&thread_registry.mutex);
+  ctx = thread_context_find(xTaskGetCurrentTaskHandle());
+  if (ctx == NULL) {
+    if ((rc = thread_context_create(&ctx)) == 0) {
+      ctx->func = &non_local_thread;
+      ctx->stat = THREAD_RUNNING;
+      ctx->task = xTaskGetCurrentTaskHandle();
+    }
+  } else {
+    assert(ctx->func != NULL);
+    assert(ctx->stat == THREAD_RUNNING);
+    assert(ctx->task == xTaskGetCurrentTaskHandle());
+  }
+  ddsrt_mutex_unlock(&thread_registry.mutex);
+#else
   if (ctx == NULL) {
     /* Dynamically initialize global thread registry (exactly once). */
     ddsrt_once(&thread_registry_once, &thread_registry_init);
@@ -205,6 +228,7 @@ thread_context_acquire(thread_context_t **ctxptr)
     assert(ctx->stat == THREAD_RUNNING);
     assert(ctx->task == xTaskGetCurrentTaskHandle());
   }
+#endif
 
   if (rc == DDS_RETCODE_OK && ctxptr != NULL) {
     assert(ctx != NULL);
@@ -326,7 +350,9 @@ thread_start_routine(void *arg)
      thread because a reference to the thread's context is stored and
      synchronization is considerably easier if it's handled there. */
 
+#if !DDSRT_WITH_FREERTOS
   thread_context = ctx;
+#endif
   ret = ctx->func(ctx->arg);
 
   thread_fini(ctx, ret); /* DO NOT DEREFERENCE THREAD CONTEXT ANYMORE! */
@@ -440,7 +466,15 @@ ddsrt_thread_fini(uint32_t reason)
   (void)reason;
   /* NO-OP if no context exists since thread-local storage and cleanup
      handler references are both stored in the thread context. */
-  if ((ctx = thread_context) != NULL) {
+#if DDSRT_WITH_FREERTOS
+  ddsrt_once(&thread_registry_once, &thread_registry_init);
+  ddsrt_mutex_lock(&thread_registry.mutex);
+  ctx = thread_context_find(xTaskGetCurrentTaskHandle());
+  ddsrt_mutex_unlock(&thread_registry.mutex);
+#else
+  ctx = thread_context;
+#endif
+  if (ctx != NULL) {
     assert(ctx->func != &non_local_thread);
     thread_fini(ctx, 0);
   }
