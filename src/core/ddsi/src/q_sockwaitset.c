@@ -505,7 +505,7 @@ int os_sockWaitsetNextEvent (os_sockWaitsetCtx ctx, ddsi_tran_conn_t * conn)
 #define OSPL_PIPENAMESIZE 26
 #endif
 
-#if !_WIN32 && !LWIP_SOCKET
+#if !_WIN32 && !LWIP_SOCKET && !DDSRT_WITH_THREADX
 
 #if ! __VXWORKS__&& !__QNXNTO__
 #include <sys/fcntl.h>
@@ -520,7 +520,7 @@ int os_sockWaitsetNextEvent (os_sockWaitsetCtx ctx, ddsi_tran_conn_t * conn)
 #include <fcntl.h>
 #endif
 
-#endif /* !_WIN32 && !LWIP_SOCKET */
+#endif /* !_WIN32 && !LWIP_SOCKET && !DDSRT_WITH_THREADX */
 
 typedef struct os_sockWaitsetSet
 {
@@ -715,7 +715,7 @@ os_sockWaitset os_sockWaitsetNew (void)
 #endif
   ws->set.conns[0] = NULL;
 
-#if !defined(__VXWORKS__) && !defined(_WIN32) && !defined(LWIP_SOCKET) && !defined(__QNXNTO__)
+#if !defined(__VXWORKS__) && !defined(_WIN32) && !defined(LWIP_SOCKET) && !defined(DDSRT_WITH_THREADX) && !defined(__QNXNTO__)
   (void) fcntl (ws->pipe[0], F_SETFD, fcntl (ws->pipe[0], F_GETFD) | FD_CLOEXEC);
   (void) fcntl (ws->pipe[1], F_SETFD, fcntl (ws->pipe[1], F_GETFD) | FD_CLOEXEC);
 #endif

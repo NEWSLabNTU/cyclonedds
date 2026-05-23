@@ -22,6 +22,11 @@ include(CheckSymbolExists)
 # always be instructed to use an "alternative" stack.
 option(WITH_LWIP "Use lightweight IP stack" OFF)
 option(WITH_FREERTOS "Build for FreeRTOS" OFF)
+option(WITH_THREADX "Build for ThreadX" OFF)
+
+if(WITH_FREERTOS AND WITH_THREADX)
+  message(FATAL_ERROR "WITH_FREERTOS and WITH_THREADX are mutually exclusive")
+endif()
 
 set(source_dir "${CMAKE_CURRENT_SOURCE_DIR}")
 set(binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
@@ -109,7 +114,18 @@ set(sources
 # that the network stack to be used is lwIP as opposed to the target native
 # network stack. In order to mix-and-match various compilers, architectures,
 # operating systems, etc input from the build system is required.
-if(WITH_LWIP)
+if(WITH_THREADX)
+  set(CMAKE_EXTRA_INCLUDE_FILES "nxd_bsd.h")
+  set(hostname_header "nxd_bsd.h")
+  set(inet_header "nxd_bsd.h")
+  set(netdb_header "nxd_bsd.h")
+  list(APPEND headers
+    "${source_dir}/include/dds/ddsrt/sockets/threadx.h")
+  list(APPEND sources
+    "${source_dir}/src/ifaddrs/threadx/ifaddrs.c"
+    "${source_dir}/src/sockets/threadx/socket.c"
+    "${source_dir}/src/sockets/threadx/gethostname.c")
+elseif(WITH_LWIP)
   set(CMAKE_EXTRA_INCLUDE_FILES "ws2tcpip.h")
   set(hostname_header "unistd.h")
   set(inet_header "lwip/sockets.h")
@@ -152,11 +168,18 @@ else()
   endif()
 endif()
 
-check_symbol_exists("gethostname" ${hostname_header} DDSRT_HAVE_GETHOSTNAME)
-check_symbol_exists("inet_ntop" ${inet_header} DDSRT_HAVE_INET_NTOP)
-check_symbol_exists("inet_pton" ${inet_header} DDSRT_HAVE_INET_PTON)
-check_symbol_exists("getaddrinfo" ${netdb_header} DDSRT_HAVE_GETADDRINFO)
-check_symbol_exists("gethostbyname_r" ${netdb_header} DDSRT_HAVE_GETHOSTBYNAME_R)
+if(WITH_THREADX)
+  set(DDSRT_HAVE_GETHOSTNAME TRUE)
+  set(DDSRT_HAVE_INET_NTOP TRUE)
+  set(DDSRT_HAVE_INET_PTON TRUE)
+  set(DDSRT_HAVE_GETADDRINFO TRUE)
+else()
+  check_symbol_exists("gethostname" ${hostname_header} DDSRT_HAVE_GETHOSTNAME)
+  check_symbol_exists("inet_ntop" ${inet_header} DDSRT_HAVE_INET_NTOP)
+  check_symbol_exists("inet_pton" ${inet_header} DDSRT_HAVE_INET_PTON)
+  check_symbol_exists("getaddrinfo" ${netdb_header} DDSRT_HAVE_GETADDRINFO)
+  check_symbol_exists("gethostbyname_r" ${netdb_header} DDSRT_HAVE_GETHOSTBYNAME_R)
+endif()
 if(DDSRT_HAVE_GETADDRINFO OR DDSRT_HAVE_GETHOSTBYNAME_R)
   set(DDSRT_HAVE_DNS TRUE)
 endif()
@@ -167,7 +190,20 @@ if(ENABLE_IPV6)
   endif()
 endif()
 
-if(WITH_FREERTOS)
+if(WITH_THREADX)
+  list(APPEND headers
+    "${source_dir}/include/dds/ddsrt/sync/threadx.h"
+    "${source_dir}/include/dds/ddsrt/threads/threadx.h"
+    "${source_dir}/include/dds/ddsrt/time/threadx.h")
+  list(APPEND sources
+    "${source_dir}/src/environ/posix/environ.c"
+    "${source_dir}/src/heap/threadx/heap.c"
+    "${source_dir}/src/sync/threadx/sync.c"
+    "${source_dir}/src/threads/threadx/threads.c"
+    "${source_dir}/src/time/threadx/time.c"
+    "${source_dir}/src/process/threadx/process.c"
+    "${source_dir}/src/random/posix/random.c")
+elseif(WITH_FREERTOS)
   list(APPEND headers
     "${source_dir}/include/dds/ddsrt/sync/freertos.h"
     "${source_dir}/include/dds/ddsrt/threads/freertos.h"
@@ -281,6 +317,7 @@ endif()
 # Generate configuration file
 set(DDSRT_WITH_LWIP ${WITH_LWIP})
 set(DDSRT_WITH_FREERTOS ${WITH_FREERTOS})
+set(DDSRT_WITH_THREADX ${WITH_THREADX})
 
 foreach(feature SSL SECURITY LIFESPAN DEADLINE_MISSED NETWORK_PARTITIONS
                 SSM TYPE_DISCOVERY TOPIC_DISCOVERY SHM)

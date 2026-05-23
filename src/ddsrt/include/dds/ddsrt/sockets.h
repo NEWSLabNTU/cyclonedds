@@ -10,7 +10,9 @@
 #include "dds/ddsrt/retcode.h"
 #include "dds/ddsrt/time.h"
 #include "dds/ddsrt/misc.h"
-#if _WIN32
+#if DDSRT_WITH_THREADX
+#include "dds/ddsrt/sockets/threadx.h"
+#elif _WIN32
 #include "dds/ddsrt/sockets/windows.h"
 #else
 #include "dds/ddsrt/sockets/posix.h"

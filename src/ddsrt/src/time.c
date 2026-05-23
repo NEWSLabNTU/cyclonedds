@@ -21,7 +21,7 @@ DDS_EXPORT extern inline ddsrt_mtime_t ddsrt_mtime_add_duration(ddsrt_mtime_t ab
 DDS_EXPORT extern inline ddsrt_wctime_t ddsrt_wctime_add_duration(ddsrt_wctime_t abstime, dds_duration_t reltime);
 DDS_EXPORT extern inline ddsrt_etime_t ddsrt_etime_add_duration(ddsrt_etime_t abstime, dds_duration_t reltime);
 
-#if !_WIN32 && !DDSRT_WITH_FREERTOS
+#if !_WIN32 && !DDSRT_WITH_FREERTOS && !DDSRT_WITH_THREADX
 #include <errno.h>
 
 void dds_sleepfor(dds_duration_t n)

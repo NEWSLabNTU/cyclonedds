@@ -24,6 +24,12 @@ typedef unsigned long ddsrt_msg_iovlen_t;
 
 #else // _WIN32
 
+#if DDSRT_WITH_THREADX
+#include <stddef.h>
+typedef struct nx_bsd_iovec ddsrt_iovec_t;
+typedef size_t ddsrt_iov_len_t;
+typedef size_t ddsrt_msg_iovlen_t;
+#else
 #if DDSRT_WITH_LWIP
 #include <lwip/sockets.h>
 #else
@@ -39,6 +45,8 @@ typedef size_t ddsrt_msg_iovlen_t;
 #else /* POSIX says int (which macOS, FreeBSD, Solaris do) */
 typedef int ddsrt_msg_iovlen_t;
 #endif
+
+#endif /* DDSRT_WITH_THREADX */
 
 #endif // _WIN32
 

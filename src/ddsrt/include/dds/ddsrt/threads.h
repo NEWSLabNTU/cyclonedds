@@ -29,6 +29,8 @@
 
 #if DDSRT_WITH_FREERTOS
 #include "dds/ddsrt/threads/freertos.h"
+#elif DDSRT_WITH_THREADX
+#include "dds/ddsrt/threads/threadx.h"
 #elif _WIN32
 #include "dds/ddsrt/threads/windows.h"
 #else

@@ -19,7 +19,7 @@
 #include "dds/ddsrt/heap.h"
 #include "dds/ddsrt/log.h"
 
-#if !LWIP_SOCKET
+#if !LWIP_SOCKET && !DDSRT_WITH_THREADX
 # if !defined(_WIN32)
 #   include <arpa/inet.h>
 #   include <netdb.h>
@@ -28,7 +28,7 @@
 #     include <linux/if_packet.h> /* sockaddr_ll */
 #   endif /* __linux */
 # endif /* _WIN32 */
-#endif /* LWIP_SOCKET */
+#endif /* !LWIP_SOCKET && !DDSRT_WITH_THREADX */
 
 #if defined __APPLE__
 #include <net/if_dl.h>
