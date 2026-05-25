@@ -73,13 +73,18 @@ ddsrt_getifaddrs(ddsrt_ifaddrs_t **ifap, const int *afs)
     return DDS_RETCODE_OUT_OF_RESOURCES;
   }
 
+  /* Phase 177.26 — the board hook returns the address in host byte order,
+     but Cyclone/NetX (real htonl/ntohl) treat sockaddr_in.sin_addr as
+     network byte order. Storing host order here made Cyclone advertise a
+     byte-swapped unicast locator in SPDP, so peers routed replies
+     off-subnet via the gateway and discovery never reached SEDP. */
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
-  sa.sin_addr.s_addr = addr;
+  sa.sin_addr.s_addr = (uint32_t)__builtin_bswap32(addr);
   memcpy(ifa->addr, &sa, sizeof(sa));
-  sa.sin_addr.s_addr = netmask;
+  sa.sin_addr.s_addr = (uint32_t)__builtin_bswap32(netmask);
   memcpy(ifa->netmask, &sa, sizeof(sa));
-  sa.sin_addr.s_addr = broadcast;
+  sa.sin_addr.s_addr = (uint32_t)__builtin_bswap32(broadcast);
   memcpy(ifa->broadaddr, &sa, sizeof(sa));
 
   ifa->index = 0;

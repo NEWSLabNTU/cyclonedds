@@ -205,7 +205,10 @@ ddsrt_sockaddrfromstr(int af, const char *str, void *sa)
           a > 255 || b > 255 || c > 255 || d > 255) {
         return DDS_RETCODE_BAD_PARAMETER;
       }
-      buf.s_addr = (uint32_t) ((a << 24) | (b << 16) | (c << 8) | d);
+      /* Phase 177.26 — sin_addr.s_addr is network byte order; the host-order
+         value here byte-reversed every parsed locator (e.g. the SPDP
+         multicast group 239.255.0.1) on little-endian ThreadX. */
+      buf.s_addr = htonl ((uint32_t) ((a << 24) | (b << 16) | (c << 8) | d));
 #else
 #if DDSRT_HAVE_INET_PTON
       if (inet_pton(af, str, &buf) != 1) {
