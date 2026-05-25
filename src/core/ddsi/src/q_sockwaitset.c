@@ -647,7 +647,7 @@ fail:
   if (s2 >= 0) close (s2);
   return -1;
 }
-#elif !defined(LWIP_SOCKET)
+#elif !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
 static int make_pipe (int pfd[2])
 {
   return pipe (pfd);
@@ -693,7 +693,7 @@ os_sockWaitset os_sockWaitsetNew (void)
   ws->fdmax_plus_1 = FD_SETSIZE;
 #endif
 
-#if defined(LWIP_SOCKET)
+#if defined(LWIP_SOCKET) || DDSRT_WITH_THREADX
   ws->pipe[0] = -1;
   ws->pipe[1] = -1;
   result = 0;
@@ -708,7 +708,7 @@ os_sockWaitset os_sockWaitsetNew (void)
     return NULL;
   }
 
-#if !defined(LWIP_SOCKET)
+#if !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
   ws->set.fds[0] = ws->pipe[0];
 #else
   ws->set.fds[0] = 0;
@@ -719,7 +719,7 @@ os_sockWaitset os_sockWaitsetNew (void)
   (void) fcntl (ws->pipe[0], F_SETFD, fcntl (ws->pipe[0], F_GETFD) | FD_CLOEXEC);
   (void) fcntl (ws->pipe[1], F_SETFD, fcntl (ws->pipe[1], F_GETFD) | FD_CLOEXEC);
 #endif
-#if !defined(LWIP_SOCKET)
+#if !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
   FD_SET (ws->set.fds[0], &ws->ctx.rdset);
 #endif
 #if !defined(_WIN32)
@@ -740,6 +740,8 @@ static void os_sockWaitsetGrow (os_sockWaitsetSet * set)
 
 void os_sockWaitsetFree (os_sockWaitset ws)
 {
+  if (ws == NULL)
+    return;
 #if defined(__VXWORKS__) && defined(__RTP__)
   char nameBuf[OSPL_PIPENAMESIZE];
   ioctl (ws->pipe[0], FIOGETNAME, &nameBuf);
@@ -747,7 +749,7 @@ void os_sockWaitsetFree (os_sockWaitset ws)
 #if defined(_WIN32)
   closesocket (ws->pipe[0]);
   closesocket (ws->pipe[1]);
-#elif !defined(LWIP_SOCKET)
+#elif !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
   (void) close (ws->pipe[0]);
   (void) close (ws->pipe[1]);
 #endif
@@ -762,7 +764,7 @@ void os_sockWaitsetFree (os_sockWaitset ws)
 
 void os_sockWaitsetTrigger (os_sockWaitset ws)
 {
-#if defined(LWIP_SOCKET)
+#if defined(LWIP_SOCKET) || DDSRT_WITH_THREADX
   (void)ws;
 #else
   char buf = 0;
@@ -892,7 +894,7 @@ os_sockWaitsetCtx os_sockWaitsetWait (os_sockWaitset ws)
 
   rdset = &ctx->rdset;
   FD_ZERO (rdset);
-#if !defined(LWIP_SOCKET)
+#if !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
   for (u = 0; u < dst->n; u++)
   {
     FD_SET (dst->fds[u], rdset);
@@ -904,7 +906,7 @@ os_sockWaitsetCtx os_sockWaitsetWait (os_sockWaitset ws)
     FD_SET (dst->fds[u], rdset);
     DDSRT_WARNING_GNUC_ON(sign-conversion)
   }
-#endif /* LWIP_SOCKET */
+#endif /* LWIP_SOCKET || DDSRT_WITH_THREADX */
 
   dds_return_t rc;
   do
@@ -921,7 +923,7 @@ os_sockWaitsetCtx os_sockWaitsetWait (os_sockWaitset ws)
   {
     /* this simply skips the trigger fd */
     ctx->index = 1;
-#if ! defined(LWIP_SOCKET)
+#if !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
     if (FD_ISSET (dst->fds[0], rdset))
     {
       char buf;
@@ -937,14 +939,14 @@ os_sockWaitsetCtx os_sockWaitsetWait (os_sockWaitset ws)
         assert (0);
       }
     }
-#endif /* LWIP_SOCKET */
+#endif /* LWIP_SOCKET || DDSRT_WITH_THREADX */
     return ctx;
   }
 
   return NULL;
 }
 
-#if defined(LWIP_SOCKET)
+#if defined(LWIP_SOCKET) || DDSRT_WITH_THREADX
 DDSRT_WARNING_GNUC_OFF(sign-conversion)
 #endif
 
@@ -954,7 +956,7 @@ int os_sockWaitsetNextEvent (os_sockWaitsetCtx ctx, ddsi_tran_conn_t * conn)
   {
     unsigned idx = ctx->index++;
     ddsrt_socket_t fd = ctx->set.fds[idx];
-#if ! defined (LWIP_SOCKET)
+#if !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
     assert(idx > 0);
 #endif
     if (FD_ISSET (fd, &ctx->rdset))
@@ -967,7 +969,7 @@ int os_sockWaitsetNextEvent (os_sockWaitsetCtx ctx, ddsi_tran_conn_t * conn)
   return -1;
 }
 
-#if defined(LWIP_SOCKET)
+#if defined(LWIP_SOCKET) || DDSRT_WITH_THREADX
 DDSRT_WARNING_GNUC_ON(sign-conversion)
 #endif
 

@@ -38,7 +38,19 @@ typedef struct {
   FILE *out;
 } log_sink_t;
 
+/*
+ * ThreadX/RISC-V runs without C runtime TLS setup for application
+ * threads. A __thread log buffer resolves through an invalid TLS base
+ * there, so snprintf writes through bogus addresses during early
+ * participant initialization. Cyclone serializes log emission with the
+ * sink lock below, making a process-global scratch buffer safe for the
+ * ThreadX port.
+ */
+#if DDSRT_WITH_THREADX
+static log_buffer_t log_buffer;
+#else
 static ddsrt_thread_local log_buffer_t log_buffer;
+#endif
 
 static ddsrt_once_t lock_inited = DDSRT_ONCE_INIT;
 static ddsrt_rwlock_t lock;

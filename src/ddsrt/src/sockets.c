@@ -13,6 +13,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "sockets_priv.h"
@@ -197,6 +198,15 @@ ddsrt_sockaddrfromstr(int af, const char *str, void *sa)
   switch (af) {
     case AF_INET: {
       struct in_addr buf;
+#if DDSRT_WITH_THREADX
+      unsigned a, b, c, d;
+      char tail;
+      if (sscanf (str, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 ||
+          a > 255 || b > 255 || c > 255 || d > 255) {
+        return DDS_RETCODE_BAD_PARAMETER;
+      }
+      buf.s_addr = (uint32_t) ((a << 24) | (b << 16) | (c << 8) | d);
+#else
 #if DDSRT_HAVE_INET_PTON
       if (inet_pton(af, str, &buf) != 1) {
         return DDS_RETCODE_BAD_PARAMETER;
@@ -206,6 +216,7 @@ ddsrt_sockaddrfromstr(int af, const char *str, void *sa)
       if (buf.s_addr == (in_addr_t)-1) {
         return DDS_RETCODE_BAD_PARAMETER;
       }
+#endif
 #endif
       memset(sa, 0, sizeof(struct sockaddr_in));
       ((struct sockaddr_in *)sa)->sin_family = AF_INET;

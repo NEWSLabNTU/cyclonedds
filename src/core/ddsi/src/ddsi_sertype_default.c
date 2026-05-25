@@ -356,6 +356,10 @@ dds_return_t ddsi_sertype_default_init (const struct ddsi_domaingv *gv, struct d
     st->type.typemap_ser.sz = 0;
   }
 
+#if DDSRT_WITH_THREADX
+  st->opt_size_xcdr1 = 0;
+  st->opt_size_xcdr2 = 0;
+#else
   st->opt_size_xcdr1 = (st->c.allowed_data_representation & DDS_DATA_REPRESENTATION_FLAG_XCDR1) ? dds_stream_check_optimize (&st->type, CDR_ENC_VERSION_1) : 0;
   if (st->opt_size_xcdr1 > 0)
     GVTRACE ("Marshalling XCDR1 for type: %s is %soptimised\n", st->c.type_name, st->opt_size_xcdr1 ? "" : "not ");
@@ -363,6 +367,7 @@ dds_return_t ddsi_sertype_default_init (const struct ddsi_domaingv *gv, struct d
   st->opt_size_xcdr2 = (st->c.allowed_data_representation & DDS_DATA_REPRESENTATION_FLAG_XCDR2) ? dds_stream_check_optimize (&st->type, CDR_ENC_VERSION_2) : 0;
   if (st->opt_size_xcdr2 > 0)
     GVTRACE ("Marshalling XCDR2 for type: %s is %soptimised\n", st->c.type_name, st->opt_size_xcdr2 ? "" : "not ");
+#endif
 
   return DDS_RETCODE_OK;
 }

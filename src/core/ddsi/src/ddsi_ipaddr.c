@@ -21,6 +21,11 @@
 #include "dds/ddsi/ddsi_config_impl.h"
 #include "dds/ddsi/ddsi_domaingv.h"
 
+static int sockaddr_storage_family (const struct sockaddr_storage *sa)
+{
+  return ((const struct sockaddr *) sa)->sa_family;
+}
+
 int ddsi_ipaddr_compare (const struct sockaddr *const sa1, const struct sockaddr *const sa2)
 {
   int eq;
@@ -176,7 +181,7 @@ enum ddsi_locator_from_string_result ddsi_ipaddr_from_string (ddsi_locator_t *lo
   }
   // patch in port (sin_port/sin6_port is undefined at this point and must always be set
   // before calling ddsi_ipaddr_to_loc
-  if (tmpaddr.ss_family != af) {
+  if (sockaddr_storage_family (&tmpaddr) != af) {
     return AFSR_MISMATCH;
   } else if (af == AF_INET) {
     struct sockaddr_in *x = (struct sockaddr_in *) &tmpaddr;
@@ -206,7 +211,7 @@ char *ddsi_ipaddr_to_string (char *dst, size_t sizeof_dst, const ddsi_locator_t 
     size_t pos = 0;
     int cnt = 0;
     ddsi_ipaddr_from_loc(&src, loc);
-    switch (src.ss_family)
+    switch (sockaddr_storage_family (&src))
     {
       case AF_INET:
         ddsrt_sockaddrtostr ((const struct sockaddr *) &src, dst, sizeof_dst);
@@ -261,7 +266,15 @@ void ddsi_ipaddr_to_loc (ddsi_locator_t *dst, const struct sockaddr *src, int32_
       {
         dst->port = (x->sin_port == 0) ? NN_LOCATOR_PORT_INVALID : ntohs (x->sin_port);
         memset (dst->address, 0, 12);
+#if DDSRT_WITH_THREADX
+        const uint32_t addr = x->sin_addr.s_addr;
+        dst->address[12] = (unsigned char) (addr >> 24);
+        dst->address[13] = (unsigned char) (addr >> 16);
+        dst->address[14] = (unsigned char) (addr >> 8);
+        dst->address[15] = (unsigned char) addr;
+#else
         memcpy (dst->address + 12, &x->sin_addr.s_addr, 4);
+#endif
       }
       break;
     }
@@ -310,7 +323,14 @@ void ddsi_ipaddr_from_loc (struct sockaddr_storage *dst, const ddsi_locator_t *s
       struct sockaddr_in *x = (struct sockaddr_in *) dst;
       x->sin_family = AF_INET;
       x->sin_port = (src->port == NN_LOCATOR_PORT_INVALID) ? 0 : htons ((unsigned short) src->port);
+#if DDSRT_WITH_THREADX
+      x->sin_addr.s_addr = ((uint32_t) src->address[12] << 24) |
+                           ((uint32_t) src->address[13] << 16) |
+                           ((uint32_t) src->address[14] << 8) |
+                           (uint32_t) src->address[15];
+#else
       memcpy (&x->sin_addr.s_addr, src->address + 12, 4);
+#endif
       break;
     }
 #if DDSRT_HAVE_IPV6

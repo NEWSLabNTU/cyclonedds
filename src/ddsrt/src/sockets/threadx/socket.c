@@ -63,6 +63,11 @@ static dds_return_t errno_to_retcode(int errnum)
   }
 }
 
+static dds_return_t threadx_errno_to_retcode(void)
+{
+  return errno_to_retcode(_nxd_get_errno());
+}
+
 dds_return_t ddsrt_socket(ddsrt_socket_t *sockptr, int domain, int type, int protocol)
 {
   ddsrt_socket_t sock;
@@ -73,28 +78,28 @@ dds_return_t ddsrt_socket(ddsrt_socket_t *sockptr, int domain, int type, int pro
     *sockptr = sock;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_close(ddsrt_socket_t sock)
 {
-  return nx_bsd_soc_close(sock) == 0 ? DDS_RETCODE_OK : errno_to_retcode(errno);
+  return nx_bsd_soc_close(sock) == 0 ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_bind(ddsrt_socket_t sock, const struct sockaddr *addr, socklen_t addrlen)
 {
-  return nx_bsd_bind(sock, addr, (INT)addrlen) == 0 ? DDS_RETCODE_OK : errno_to_retcode(errno);
+  return nx_bsd_bind(sock, addr, (INT)addrlen) == 0 ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_listen(ddsrt_socket_t sock, int backlog)
 {
-  return nx_bsd_listen(sock, backlog) == 0 ? DDS_RETCODE_OK : errno_to_retcode(errno);
+  return nx_bsd_listen(sock, backlog) == 0 ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_connect(ddsrt_socket_t sock, const struct sockaddr *addr, socklen_t addrlen)
 {
   return nx_bsd_connect(sock, (struct sockaddr *)addr, (INT)addrlen) == 0
-    ? DDS_RETCODE_OK : errno_to_retcode(errno);
+    ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_accept(ddsrt_socket_t sock, struct sockaddr *addr, socklen_t *addrlen, ddsrt_socket_t *connptr)
@@ -109,7 +114,7 @@ dds_return_t ddsrt_accept(ddsrt_socket_t sock, struct sockaddr *addr, socklen_t 
     *connptr = conn;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_getsockname(ddsrt_socket_t sock, struct sockaddr *addr, socklen_t *addrlen)
@@ -120,38 +125,44 @@ dds_return_t ddsrt_getsockname(ddsrt_socket_t sock, struct sockaddr *addr, sockl
     *addrlen = (socklen_t)len;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_getsockopt(ddsrt_socket_t sock, int32_t level, int32_t optname, void *optval, socklen_t *optlen)
 {
   INT len = optlen != NULL ? (INT)*optlen : 0;
+  if (level == SOL_SOCKET && (optname == SO_RCVBUF || optname == SO_SNDBUF)) {
+    return DDS_RETCODE_UNSUPPORTED;
+  }
   INT rc = nx_bsd_getsockopt(sock, level, optname, optval, &len);
   if (rc == 0) {
     *optlen = (socklen_t)len;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_setsockopt(ddsrt_socket_t sock, int32_t level, int32_t optname, const void *optval, socklen_t optlen)
 {
+  if (level == SOL_SOCKET && optname == SO_REUSEPORT) {
+    return DDS_RETCODE_UNSUPPORTED;
+  }
   return nx_bsd_setsockopt(sock, level, optname, optval, (INT)optlen) == 0
-    ? DDS_RETCODE_OK : errno_to_retcode(errno);
+    ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_setsocknonblocking(ddsrt_socket_t sock, bool nonblock)
 {
   INT flags = nx_bsd_fcntl(sock, F_GETFL, 0);
   if (flags < 0) {
-    return errno_to_retcode(errno);
+    return threadx_errno_to_retcode();
   }
   if (nonblock) {
     flags |= O_NONBLOCK;
   } else {
     flags &= ~O_NONBLOCK;
   }
-  return nx_bsd_fcntl(sock, F_SETFL, flags) == 0 ? DDS_RETCODE_OK : errno_to_retcode(errno);
+  return nx_bsd_fcntl(sock, F_SETFL, flags) == 0 ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_setsockreuse(ddsrt_socket_t sock, bool reuse)
@@ -167,7 +178,7 @@ dds_return_t ddsrt_recv(ddsrt_socket_t sock, void *buf, size_t len, int flags, s
     *rcvd = n;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_recvmsg(ddsrt_socket_t sock, ddsrt_msghdr_t *msg, int flags, ssize_t *rcvd)
@@ -177,7 +188,7 @@ dds_return_t ddsrt_recvmsg(ddsrt_socket_t sock, ddsrt_msghdr_t *msg, int flags, 
     *rcvd = n;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_send(ddsrt_socket_t sock, const void *buf, size_t len, int flags, ssize_t *sent)
@@ -187,7 +198,7 @@ dds_return_t ddsrt_send(ddsrt_socket_t sock, const void *buf, size_t len, int fl
     *sent = n;
     return DDS_RETCODE_OK;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }
 
 dds_return_t ddsrt_sendmsg(ddsrt_socket_t sock, const ddsrt_msghdr_t *msg, int flags, ssize_t *sent)
@@ -206,14 +217,14 @@ dds_return_t ddsrt_sendmsg(ddsrt_socket_t sock, const ddsrt_msghdr_t *msg, int f
       *sent = n;
       return DDS_RETCODE_OK;
     }
-    return errno_to_retcode(errno);
+    return threadx_errno_to_retcode();
   }
 
   for (size_t i = 0; i < msg->msg_iovlen; i++) {
     INT n = nx_bsd_send(sock, (CHAR *)msg->msg_iov[i].iov_base,
                         (INT)msg->msg_iov[i].iov_len, flags);
     if (n < 0) {
-      return errno_to_retcode(errno);
+      return threadx_errno_to_retcode();
     }
     total += n;
     if ((size_t)n != msg->msg_iov[i].iov_len) {
@@ -234,5 +245,5 @@ dds_return_t ddsrt_select(int32_t nfds, fd_set *readfds, fd_set *writefds, fd_se
   if (n >= 0) {
     return n == 0 ? DDS_RETCODE_TIMEOUT : n;
   }
-  return errno_to_retcode(errno);
+  return threadx_errno_to_retcode();
 }

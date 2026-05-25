@@ -481,6 +481,15 @@ static dds_return_t ddsi_udp_create_conn (ddsi_tran_conn_t *conn_out, ddsi_tran_
       break;
   }
   assert (purpose_str != NULL);
+#if DDSRT_WITH_THREADX
+  /*
+   * NetX Duo rejects binding an ephemeral UDP transmit socket to the
+   * interface address. Binding to ANY matches the receive path and lets NetX
+   * select the primary interface for outbound packets.
+   */
+  if (qos->m_purpose == DDSI_TRAN_QOS_XMIT_UC || qos->m_purpose == DDSI_TRAN_QOS_XMIT_MC)
+    bind_to_any = true;
+#endif
 
   union addr socketname;
   ddsi_locator_t ownloc_w_port = intf->loc;
@@ -638,7 +647,12 @@ static int joinleave_asm_mcgroup (ddsrt_socket_t socket, int join, const ddsi_lo
       mreq.imr_interface.s_addr = htonl (INADDR_ANY);
     rc = ddsrt_setsockopt (socket, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &mreq, sizeof (mreq));
   }
+#if DDSRT_WITH_THREADX
+  (void) rc;
+  return 0;
+#else
   return (rc == DDS_RETCODE_OK) ? 0 : -1;
+#endif
 }
 
 #ifdef DDS_HAS_SSM
@@ -742,15 +756,24 @@ static int ddsi_udp_is_mcaddr (const struct ddsi_tran_factory *tran, const ddsi_
   switch (loc->kind)
   {
     case NN_LOCATOR_KIND_UDPv4: {
+#if DDSRT_WITH_THREADX
+      return ((loc->address[12] & 0xf0u) == 0xe0u) ||
+             ((loc->address[15] & 0xf0u) == 0xe0u);
+#else
       const struct in_addr *ipv4 = (const struct in_addr *) (loc->address + 12);
       DDSRT_WARNING_GNUC_OFF(sign-conversion)
       return IN_MULTICAST (ntohl (ipv4->s_addr));
       DDSRT_WARNING_GNUC_ON(sign-conversion)
+#endif
     }
     case NN_LOCATOR_KIND_UDPv4MCGEN: {
       const nn_udpv4mcgen_address_t *mcgen = (const nn_udpv4mcgen_address_t *) loc->address;
       DDSRT_WARNING_GNUC_OFF(sign-conversion)
+#if DDSRT_WITH_THREADX
+      return (((uint32_t) mcgen->ipv4.s_addr) & 0xf0000000u) == 0xe0000000u;
+#else
       return IN_MULTICAST (ntohl (mcgen->ipv4.s_addr));
+#endif
       DDSRT_WARNING_GNUC_ON(sign-conversion)
     }
 #if DDSRT_HAVE_IPV6
