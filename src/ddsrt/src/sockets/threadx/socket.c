@@ -147,6 +147,22 @@ dds_return_t ddsrt_setsockopt(ddsrt_socket_t sock, int32_t level, int32_t optnam
   if (level == SOL_SOCKET && optname == SO_REUSEPORT) {
     return DDS_RETCODE_UNSUPPORTED;
   }
+  /* Phase 177.26 — Cyclone passes the multicast group address to the BSD
+     layer in host byte order, but NetX Duo (with real htonl/ntohl from the
+     board nx_port.h) expects network byte order. Left unconverted, the
+     IP_ADD_MEMBERSHIP class-D check (s_addr & ntohl(NX_IP_CLASS_D_TYPE))
+     and the subsequent IGMP join both see the wrong value and the join
+     fails with EINVAL. Normalise imr_multiaddr to network byte order; the
+     interface address already arrives network-ordered. */
+  if (level == IPPROTO_IP &&
+      (optname == IP_ADD_MEMBERSHIP || optname == IP_DROP_MEMBERSHIP) &&
+      optval != NULL && optlen >= (socklen_t)sizeof(struct nx_bsd_ip_mreq)) {
+    struct nx_bsd_ip_mreq mreq = *(const struct nx_bsd_ip_mreq *)optval;
+    mreq.imr_multiaddr.s_addr =
+      (nx_bsd_in_addr_t)__builtin_bswap32((unsigned int)mreq.imr_multiaddr.s_addr);
+    return nx_bsd_setsockopt(sock, level, optname, &mreq, (INT)sizeof(mreq)) == 0
+      ? DDS_RETCODE_OK : threadx_errno_to_retcode();
+  }
   return nx_bsd_setsockopt(sock, level, optname, optval, (INT)optlen) == 0
     ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
@@ -203,23 +219,72 @@ dds_return_t ddsrt_send(ddsrt_socket_t sock, const void *buf, size_t len, int fl
 
 dds_return_t ddsrt_sendmsg(ddsrt_socket_t sock, const ddsrt_msghdr_t *msg, int flags, ssize_t *sent)
 {
-  ssize_t total = 0;
-  (void) flags;
-
   assert(msg != NULL);
 
-  if (msg->msg_name != NULL && msg->msg_iovlen == 1) {
-    INT n = nx_bsd_sendto(sock, (CHAR *)msg->msg_iov[0].iov_base,
-                          (INT)msg->msg_iov[0].iov_len, flags,
-                          (struct sockaddr *)msg->msg_name,
-                          (INT)msg->msg_namelen);
+  /* Datagram send with an explicit destination. NetX's nx_bsd_sendto takes
+     a single contiguous buffer, so multi-iovec RTPS messages (header +
+     submessages) must be coalesced into one datagram. The previous per-iov
+     nx_bsd_send loop dropped the destination entirely and only works for
+     connected (TCP) sockets, so connectionless UDP sends — every SPDP /
+     SEDP / data message — failed with ENOTCONN (Phase 177.26). */
+  if (msg->msg_name != NULL) {
+    struct sockaddr *dst = (struct sockaddr *)msg->msg_name;
+    socklen_t dstlen = msg->msg_namelen;
+
+    /* Cyclone hands multicast destinations to the BSD layer in host byte
+       order; NetX (real htonl/ntohl from the board nx_port.h) expects
+       network byte order, or the route lookup fails with NX_IP_ADDRESS_ERROR.
+       Swap a host-ordered multicast group; unicast destinations already
+       arrive network-ordered and are left untouched. */
+    struct nx_bsd_sockaddr_in mcast_fix;
+    if (dst->sa_family == AF_INET && dstlen >= (socklen_t)sizeof(struct nx_bsd_sockaddr_in)) {
+      const struct nx_bsd_sockaddr_in *in = (const struct nx_bsd_sockaddr_in *)dst;
+      if (IN_MULTICAST((unsigned int)in->sin_addr.s_addr)) {
+        mcast_fix = *in;
+        mcast_fix.sin_addr.s_addr =
+          (nx_bsd_in_addr_t)__builtin_bswap32((unsigned int)in->sin_addr.s_addr);
+        dst = (struct sockaddr *)&mcast_fix;
+      }
+    }
+
+    /* Single iovec: no coalescing buffer needed. */
+    if (msg->msg_iovlen == 1) {
+      INT n = nx_bsd_sendto(sock, (CHAR *)msg->msg_iov[0].iov_base,
+                            (INT)msg->msg_iov[0].iov_len, flags, dst, (INT)dstlen);
+      if (n >= 0) {
+        *sent = n;
+        return DDS_RETCODE_OK;
+      }
+      return threadx_errno_to_retcode();
+    }
+
+    size_t total = 0;
+    for (size_t i = 0; i < msg->msg_iovlen; i++) {
+      total += msg->msg_iov[i].iov_len;
+    }
+    char *buf = ddsrt_malloc(total == 0 ? 1 : total);
+    if (buf == NULL) {
+      return DDS_RETCODE_OUT_OF_RESOURCES;
+    }
+    size_t off = 0;
+    for (size_t i = 0; i < msg->msg_iovlen; i++) {
+      memcpy(buf + off, msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len);
+      off += msg->msg_iov[i].iov_len;
+    }
+    INT n = nx_bsd_sendto(sock, buf, (INT)total, flags, dst, (INT)dstlen);
+    dds_return_t rc;
     if (n >= 0) {
       *sent = n;
-      return DDS_RETCODE_OK;
+      rc = DDS_RETCODE_OK;
+    } else {
+      rc = threadx_errno_to_retcode();
     }
-    return threadx_errno_to_retcode();
+    ddsrt_free(buf);
+    return rc;
   }
 
+  /* Connected (stream) send with no destination. */
+  ssize_t total = 0;
   for (size_t i = 0; i < msg->msg_iovlen; i++) {
     INT n = nx_bsd_send(sock, (CHAR *)msg->msg_iov[i].iov_base,
                         (INT)msg->msg_iov[i].iov_len, flags);
