@@ -641,10 +641,21 @@ static int joinleave_asm_mcgroup (ddsrt_socket_t socket, int join, const ddsi_lo
   {
     struct ip_mreq mreq;
     mreq.imr_multiaddr = mcip.a4.sin_addr;
+#if DDSRT_WITH_THREADX
+    /* nano-ros 177.26.RX: NetX's nx_bsd_setsockopt IP_ADD_MEMBERSHIP handler
+     * ntohl()s imr_interface before matching nx_interface_ip_address, but on
+     * this port the locator/interface addresses share host byte order, so a
+     * specific imr_interface never matches → EINVAL → group never joined.
+     * INADDR_ANY makes the handler pick interface 0 directly (single-homed
+     * embedded; n_interfaces == 1). */
+    (void) interf;
+    mreq.imr_interface.s_addr = htonl (INADDR_ANY);
+#else
     if (interf)
       memcpy (&mreq.imr_interface, interf->loc.address + 12, sizeof (mreq.imr_interface));
     else
       mreq.imr_interface.s_addr = htonl (INADDR_ANY);
+#endif
     rc = ddsrt_setsockopt (socket, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &mreq, sizeof (mreq));
   }
 #if DDSRT_WITH_THREADX
