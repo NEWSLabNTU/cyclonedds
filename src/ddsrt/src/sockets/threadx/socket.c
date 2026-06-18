@@ -165,11 +165,12 @@ dds_return_t ddsrt_setsocknonblocking(ddsrt_socket_t sock, bool nonblock)
   return nx_bsd_fcntl(sock, F_SETFL, flags) == 0 ? DDS_RETCODE_OK : threadx_errno_to_retcode();
 }
 
-dds_return_t ddsrt_setsockreuse(ddsrt_socket_t sock, bool reuse)
-{
-  INT opt = reuse ? 1 : 0;
-  return ddsrt_setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-}
+/* `ddsrt_setsockreuse` is the platform-independent generic in
+ * `ddsrt/src/sockets.c` (it falls through to SO_REUSEADDR when SO_REUSEPORT is
+ * absent, as on NetX BSD) — exactly like the posix port, which also does not
+ * redefine it. Defining it here too is a duplicate symbol at link
+ * (`rust-lld: duplicate symbol: ddsrt_setsockreuse`), latent until phase-251
+ * dropped `--allow-multiple-definition`. See nano-ros issue 0085. */
 
 dds_return_t ddsrt_recv(ddsrt_socket_t sock, void *buf, size_t len, int flags, ssize_t *rcvd)
 {
