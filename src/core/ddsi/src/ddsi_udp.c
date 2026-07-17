@@ -11,6 +11,7 @@
  */
 #include <assert.h>
 #include <string.h>
+#include <errno.h>
 #include "dds/ddsrt/atomics.h"
 #include "dds/ddsrt/heap.h"
 #include "dds/ddsrt/log.h"
@@ -638,6 +639,27 @@ static int joinleave_asm_mcgroup (ddsrt_socket_t socket, int join, const ddsi_lo
   }
   else
 #endif
+#ifdef __ZEPHYR__
+  {
+    /* nano-ros phase-292 W2 (issue 0231): Zephyr's zsock
+     * IP_ADD_MEMBERSHIP handler accepts ONLY `struct ip_mreqn`
+     * (`optlen != sizeof(struct ip_mreqn)` -> EINVAL) and resolves the
+     * interface by `imr_ifindex`, so the classic 8-byte `struct ip_mreq`
+     * below always failed -> every join returned -1 and the stack ran
+     * unicast-only. */
+    struct ip_mreqn mreqn;
+    memset (&mreqn, 0, sizeof (mreqn));
+    mreqn.imr_multiaddr = mcip.a4.sin_addr;
+    mreqn.imr_ifindex = interf ? (int) interf->if_index : 0;
+    rc = ddsrt_setsockopt (socket, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &mreqn, sizeof (mreqn));
+    /* Zephyr's IGMP membership is per-(iface, group), not per-socket:
+     * the second socket's join of the same group returns -EALREADY.
+     * The membership exists and multicast RX is iface-level, so that IS
+     * success here. */
+    if (rc != DDS_RETCODE_OK && errno == EALREADY)
+      rc = DDS_RETCODE_OK;
+  }
+#else
   {
     struct ip_mreq mreq;
     mreq.imr_multiaddr = mcip.a4.sin_addr;
@@ -658,6 +680,7 @@ static int joinleave_asm_mcgroup (ddsrt_socket_t socket, int join, const ddsi_lo
 #endif
     rc = ddsrt_setsockopt (socket, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &mreq, sizeof (mreq));
   }
+#endif /* __ZEPHYR__ */
 #if DDSRT_WITH_THREADX
   (void) rc;
   return 0;
