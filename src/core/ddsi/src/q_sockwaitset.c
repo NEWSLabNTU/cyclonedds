@@ -614,6 +614,18 @@ fail_pipedev:
  * NSOS getsockname support added in this phase. */
 static int make_pipe (int pfd[2])
 {
+#if !defined(CONFIG_NET_SOCKETS_OFFLOAD)
+  /* nano-ros phase-292 W2 (ASI wall #5) — native-IP-stack targets (FVP,
+   * S32Z, ...) have no loopback interface by default, so the TCP
+   * self-pipe below fails its 127.0.0.1 bind with ENOENT and rtps_init
+   * dies with "can't allocate sock waitset". Zephyr's AF_UNIX
+   * socketpair (CONFIG_NET_SOCKETPAIR, forced on by the nros zephyr
+   * module for cyclone builds) yields two pollable zsock fds with no
+   * address dependency — use it whenever sockets are NOT offloaded.
+   * NSOS/native_sim (offloaded) keeps the TCP pair: its poll only
+   * watches offloaded fds. */
+  return socketpair (AF_UNIX, SOCK_STREAM, 0, pfd);
+#else
   struct sockaddr_in addr;
   socklen_t asize = sizeof (addr);
   int listener = socket (AF_INET, SOCK_STREAM, 0);
@@ -646,6 +658,7 @@ fail:
   if (s1 >= 0) close (s1);
   if (s2 >= 0) close (s2);
   return -1;
+#endif /* CONFIG_NET_SOCKETS_OFFLOAD */
 }
 #elif !defined(LWIP_SOCKET) && !DDSRT_WITH_THREADX
 static int make_pipe (int pfd[2])
