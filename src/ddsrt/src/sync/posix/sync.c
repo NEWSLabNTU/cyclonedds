@@ -23,7 +23,12 @@
 void ddsrt_mutex_init (ddsrt_mutex_t *mutex)
 {
   assert (mutex != NULL);
-  pthread_mutex_init (&mutex->mutex, NULL);
+  /* nano-ros phase-292 W2 — on Zephyr the pthread mutex pool
+   * (CONFIG_MAX_PTHREAD_MUTEX_COUNT) is finite; a silent init failure
+   * here surfaces later as an abort() in ddsrt_mutex_lock with no
+   * indication of the real cause. Fail loudly at the failure site. */
+  if (pthread_mutex_init (&mutex->mutex, NULL) != 0)
+    abort();
 }
 
 void ddsrt_mutex_destroy (ddsrt_mutex_t *mutex)
