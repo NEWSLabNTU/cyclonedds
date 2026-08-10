@@ -28,8 +28,15 @@ typedef struct addrset_node {
   ddsi_xlocator_t loc;
 } * addrset_node_t;
 
+/* nano-ros issue 0496: no per-addrset mutex. One addrset exists per proxy
+   entity and one per SEDP announcement, so a mutex in here made lock demand
+   scale with the size of the REMOTE graph — and on Zephyr every ddsrt_mutex_t
+   is a slot in the static CONFIG_MAX_PTHREAD_MUTEX_COUNT pool, which turned
+   "how large a graph can this image join" into a compile-time RAM constant
+   (16384 slots exhausted on a 33-node Autoware graph; issue 0371 was the
+   crash). The lock now comes from a small fixed array of stripes in
+   q_addrset.c, keyed on the addrset address. */
 struct addrset {
-  ddsrt_mutex_t lock;
   ddsrt_atomic_uint32_t refc;
   ddsrt_avl_ctree_t ucaddrs, mcaddrs;
 };

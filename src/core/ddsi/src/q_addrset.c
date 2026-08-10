@@ -15,6 +15,7 @@
 
 #include "dds/ddsrt/heap.h"
 #include "dds/ddsrt/log.h"
+#include "dds/ddsrt/sync.h" /* ddsrt_once for the striped locks below */
 #include "dds/ddsrt/string.h"
 #include "dds/ddsrt/misc.h"
 #include "dds/ddsrt/avl.h"
@@ -35,9 +36,73 @@
 
    Today, I'm taking the latter interpretation. But all the
    const-discarding casts get moved into LOCK/UNLOCK macros. */
-#define LOCK(as) (ddsrt_mutex_lock (&((struct addrset *) (as))->lock))
-#define TRYLOCK(as) (ddsrt_mutex_trylock (&((struct addrset *) (as))->lock))
-#define UNLOCK(as) (ddsrt_mutex_unlock (&((struct addrset *) (as))->lock))
+
+/* nano-ros issue 0496 — striped locks instead of one mutex per addrset.
+   Rationale in q_addrset.h. 64 stripes is 64 mutexes for the whole domain
+   instead of one per proxy entity and per SEDP announcement; the critical
+   sections here are single AVL lookups/inserts, so sharing a lock between
+   unrelated addrsets costs approximately nothing.
+
+   Sharing locks means two addrsets can map to the same mutex, so anything
+   that held two addrset locks at once, or held one across a callback, had to
+   stop doing that — a same-thread re-acquire is a deadlock, not a wait, and
+   these are non-recursive mutexes (on Zephyr, literally k_sleep(K_FOREVER)).
+   Two places needed the treatment, both below: the copy_addrset_into_addrset_*
+   family, which locked the source and then let the per-locator add lock the
+   destination, and the addrset_forall_* family, which ran the callback with
+   the lock held. */
+#define ADDRSET_NLOCKS 64u /* must be a power of two */
+static ddsrt_mutex_t addrset_locks[ADDRSET_NLOCKS];
+static ddsrt_once_t addrset_locks_once = DDSRT_ONCE_INIT;
+
+static void addrset_locks_init (void)
+{
+  for (uint32_t i = 0; i < ADDRSET_NLOCKS; i++)
+    ddsrt_mutex_init (&addrset_locks[i]);
+}
+
+static ddsrt_mutex_t *addrset_lock_for (const struct addrset *as)
+{
+  /* Addrsets come out of ddsrt_malloc, so the low bits are constant-ish
+     alignment padding: shift them out before masking or every addrset lands
+     in a handful of stripes. */
+  uintptr_t key = (uintptr_t) as / (2 * sizeof (void *));
+  return &addrset_locks[key & (ADDRSET_NLOCKS - 1)];
+}
+
+#define LOCK(as) (ddsrt_mutex_lock (addrset_lock_for (as)))
+#define TRYLOCK(as) (ddsrt_mutex_trylock (addrset_lock_for (as)))
+#define UNLOCK(as) (ddsrt_mutex_unlock (addrset_lock_for (as)))
+
+/* Lock two addrsets. Ordered by stripe address so two concurrent copies in
+   opposite directions cannot form a cycle, and collapsed to a single acquire
+   when both land in the same stripe. */
+static void LOCK2 (const struct addrset *a, const struct addrset *b)
+{
+  ddsrt_mutex_t * const la = addrset_lock_for (a);
+  ddsrt_mutex_t * const lb = addrset_lock_for (b);
+  if (la == lb)
+    ddsrt_mutex_lock (la);
+  else if (la < lb)
+  {
+    ddsrt_mutex_lock (la);
+    ddsrt_mutex_lock (lb);
+  }
+  else
+  {
+    ddsrt_mutex_lock (lb);
+    ddsrt_mutex_lock (la);
+  }
+}
+
+static void UNLOCK2 (const struct addrset *a, const struct addrset *b)
+{
+  ddsrt_mutex_t * const la = addrset_lock_for (a);
+  ddsrt_mutex_t * const lb = addrset_lock_for (b);
+  ddsrt_mutex_unlock (la);
+  if (lb != la)
+    ddsrt_mutex_unlock (lb);
+}
 
 static int compare_xlocators_vwrap (const void *va, const void *vb);
 
@@ -169,9 +234,11 @@ static int compare_xlocators_vwrap (const void *va, const void *vb)
 
 struct addrset *new_addrset (void)
 {
+  /* Every addrset comes from here, so initialising the stripes on this path is
+     enough to have them ready before any LOCK(as) can be reached. */
+  ddsrt_once (&addrset_locks_once, addrset_locks_init);
   struct addrset *as = ddsrt_malloc (sizeof (*as));
   ddsrt_atomic_st32 (&as->refc, 1);
-  ddsrt_mutex_init (&as->lock);
   ddsrt_avl_cinit (&addrset_treedef, &as->ucaddrs);
   ddsrt_avl_cinit (&addrset_treedef, &as->mcaddrs);
   return as;
@@ -192,7 +259,8 @@ void unref_addrset (struct addrset *as)
   {
     ddsrt_avl_cfree (&addrset_treedef, &as->ucaddrs, ddsrt_free);
     ddsrt_avl_cfree (&addrset_treedef, &as->mcaddrs, ddsrt_free);
-    ddsrt_mutex_destroy (&as->lock);
+    /* no ddsrt_mutex_destroy: the stripe outlives every addrset that hashed
+       to it, and is shared with the ones that still exist */
     ddsrt_free (as);
   }
 }
@@ -287,19 +355,28 @@ int addrset_purge (struct addrset *as)
   return 0;
 }
 
-static void add_xlocator_to_addrset_impl (const struct ddsi_domaingv *gv, struct addrset *as, const ddsi_xlocator_t *loc)
+/* Caller holds as's stripe. Split out so the copy_addrset_into_addrset_*
+   family can hold both stripes for the whole walk instead of re-acquiring the
+   destination's — which deadlocks when it is the same stripe as the source's
+   (nano-ros issue 0496). */
+static void add_xlocator_to_addrset_locked (const struct ddsi_domaingv *gv, struct addrset *as, const ddsi_xlocator_t *loc)
 {
   assert (!is_unspec_locator (&loc->c));
   assert (loc->conn != NULL);
   ddsrt_avl_ipath_t path;
   ddsrt_avl_ctree_t *tree = ddsi_is_mcaddr (gv, &loc->c) ? &as->mcaddrs : &as->ucaddrs;
-  LOCK (as);
   if (ddsrt_avl_clookup_ipath (&addrset_treedef, tree, loc, &path) == NULL)
   {
     struct addrset_node *n = ddsrt_malloc (sizeof (*n));
     n->loc = *loc;
     ddsrt_avl_cinsert_ipath (&addrset_treedef, tree, n, &path);
   }
+}
+
+static void add_xlocator_to_addrset_impl (const struct ddsi_domaingv *gv, struct addrset *as, const ddsi_xlocator_t *loc)
+{
+  LOCK (as);
+  add_xlocator_to_addrset_locked (gv, as, loc);
   UNLOCK (as);
 }
 
@@ -374,20 +451,20 @@ void copy_addrset_into_addrset_uc (const struct ddsi_domaingv *gv, struct addrse
 {
   struct addrset_node *n;
   ddsrt_avl_citer_t it;
-  LOCK (asadd);
+  LOCK2 (as, asadd);
   for (n = ddsrt_avl_citer_first (&addrset_treedef, &asadd->ucaddrs, &it); n; n = ddsrt_avl_citer_next (&it))
-    add_xlocator_to_addrset_impl (gv, as, &n->loc);
-  UNLOCK (asadd);
+    add_xlocator_to_addrset_locked (gv, as, &n->loc);
+  UNLOCK2 (as, asadd);
 }
 
 void copy_addrset_into_addrset_mc (const struct ddsi_domaingv *gv, struct addrset *as, const struct addrset *asadd)
 {
   struct addrset_node *n;
   ddsrt_avl_citer_t it;
-  LOCK (asadd);
+  LOCK2 (as, asadd);
   for (n = ddsrt_avl_citer_first (&addrset_treedef, &asadd->mcaddrs, &it); n; n = ddsrt_avl_citer_next (&it))
-    add_xlocator_to_addrset_impl (gv, as, &n->loc);
-  UNLOCK (asadd);
+    add_xlocator_to_addrset_locked (gv, as, &n->loc);
+  UNLOCK2 (as, asadd);
 }
 
 void copy_addrset_into_addrset (const struct ddsi_domaingv *gv, struct addrset *as, const struct addrset *asadd)
@@ -401,13 +478,13 @@ void copy_addrset_into_addrset_no_ssm_mc (const struct ddsi_domaingv *gv, struct
 {
   struct addrset_node *n;
   ddsrt_avl_citer_t it;
-  LOCK (asadd);
+  LOCK2 (as, asadd);
   for (n = ddsrt_avl_citer_first (&addrset_treedef, &asadd->mcaddrs, &it); n; n = ddsrt_avl_citer_next (&it))
   {
     if (!ddsi_is_ssm_mcaddr (gv, &n->loc.c))
-      add_xlocator_to_addrset_impl (gv, as, &n->loc);
+      add_xlocator_to_addrset_locked (gv, as, &n->loc);
   }
-  UNLOCK (asadd);
+  UNLOCK2 (as, asadd);
 
 }
 
@@ -538,30 +615,69 @@ void addrset_any_uc_else_mc_nofail (const struct addrset *as, ddsi_xlocator_t *d
   UNLOCK (as);
 }
 
-struct addrset_forall_helper_arg
-{
-  addrset_forall_fun_t f;
-  void * arg;
+/* nano-ros issue 0496 — the callback must NOT run with an addrset lock held.
+   A callback is arbitrary code and some of them re-enter this layer on the
+   same thread: purge_helper (ddsi_proxy_participant.c) deletes a proxy
+   participant, and writing that participant's builtin-topic sample formats an
+   addrset via addrset_forall (dds_serdata_builtintopic.c). With one mutex per
+   addrset that only deadlocked if the callback reached the very same addrset;
+   with striped locks any same-stripe pair does it. So snapshot the locators
+   under the lock and run the callback afterwards.
+
+   A stack buffer covers the normal case — an addrset holds a handful of
+   locators — and the heap is only touched by an unusually large one. */
+#define ADDRSET_SNAP_NSTACK 16
+
+struct addrset_snapshot {
+  ddsi_xlocator_t *locs;
+  size_t n;
+  ddsi_xlocator_t stack[ADDRSET_SNAP_NSTACK];
 };
 
-static void addrset_forall_helper (void *vnode, void *varg)
+static void addrset_snapshot_collect (void *vnode, void *varg)
 {
   const struct addrset_node *n = vnode;
-  struct addrset_forall_helper_arg *arg = varg;
-  arg->f (&n->loc, arg->arg);
+  struct addrset_snapshot *s = varg;
+  s->locs[s->n++] = n->loc;
+}
+
+/* Caller holds as's stripe. `trees` are copied in the order given. */
+static void addrset_snapshot_begin (struct addrset_snapshot *s, const ddsrt_avl_ctree_t **trees, size_t ntrees)
+{
+  size_t total = 0;
+  for (size_t i = 0; i < ntrees; i++)
+    total += ddsrt_avl_ccount ((ddsrt_avl_ctree_t *) trees[i]);
+  s->locs = (total <= ADDRSET_SNAP_NSTACK) ? s->stack : ddsrt_malloc (total * sizeof (*s->locs));
+  s->n = 0;
+  for (size_t i = 0; i < ntrees; i++)
+    ddsrt_avl_cwalk (&addrset_treedef, (ddsrt_avl_ctree_t *) trees[i], addrset_snapshot_collect, s);
+  assert (s->n == total);
+}
+
+static void addrset_snapshot_end (struct addrset_snapshot *s)
+{
+  if (s->locs != s->stack)
+    ddsrt_free (s->locs);
+}
+
+static void addrset_snapshot_apply (const struct addrset_snapshot *s, addrset_forall_fun_t f, void *arg)
+{
+  for (size_t i = 0; i < s->n; i++)
+    f (&s->locs[i], arg);
 }
 
 size_t addrset_forall_count (struct addrset *as, addrset_forall_fun_t f, void *arg)
 {
-  struct addrset_forall_helper_arg arg1;
-  size_t count;
-  arg1.f = f;
-  arg1.arg = arg;
+  struct addrset_snapshot s;
+  const ddsrt_avl_ctree_t *trees[2];
   LOCK (as);
-  ddsrt_avl_cwalk (&addrset_treedef, &as->mcaddrs, addrset_forall_helper, &arg1);
-  ddsrt_avl_cwalk (&addrset_treedef, &as->ucaddrs, addrset_forall_helper, &arg1);
-  count = ddsrt_avl_ccount (&as->ucaddrs) + ddsrt_avl_ccount (&as->mcaddrs);
+  trees[0] = &as->mcaddrs;
+  trees[1] = &as->ucaddrs;
+  addrset_snapshot_begin (&s, trees, 2);
   UNLOCK (as);
+  addrset_snapshot_apply (&s, f, arg);
+  const size_t count = s.n;
+  addrset_snapshot_end (&s);
   return count;
 }
 
@@ -572,35 +688,28 @@ void addrset_forall (struct addrset *as, addrset_forall_fun_t f, void *arg)
 
 size_t addrset_forall_uc_else_mc_count (struct addrset *as, addrset_forall_fun_t f, void *arg)
 {
-  struct addrset_forall_helper_arg arg1;
-  size_t count;
-  arg1.f = f;
-  arg1.arg = arg;
+  struct addrset_snapshot s;
+  const ddsrt_avl_ctree_t *tree;
   LOCK (as);
-  if (!ddsrt_avl_cis_empty (&as->ucaddrs))
-  {
-    ddsrt_avl_cwalk (&addrset_treedef, &as->ucaddrs, addrset_forall_helper, &arg1);
-    count = ddsrt_avl_ccount (&as->ucaddrs);
-  }
-  else
-  {
-    ddsrt_avl_cwalk (&addrset_treedef, &as->mcaddrs, addrset_forall_helper, &arg1);
-    count = ddsrt_avl_ccount (&as->mcaddrs);
-  }
+  tree = !ddsrt_avl_cis_empty (&as->ucaddrs) ? &as->ucaddrs : &as->mcaddrs;
+  addrset_snapshot_begin (&s, &tree, 1);
   UNLOCK (as);
+  addrset_snapshot_apply (&s, f, arg);
+  const size_t count = s.n;
+  addrset_snapshot_end (&s);
   return count;
 }
 
 size_t addrset_forall_mc_count (struct addrset *as, addrset_forall_fun_t f, void *arg)
 {
-  struct addrset_forall_helper_arg arg1;
-  size_t count;
-  arg1.f = f;
-  arg1.arg = arg;
+  struct addrset_snapshot s;
+  const ddsrt_avl_ctree_t *tree = &as->mcaddrs;
   LOCK (as);
-  ddsrt_avl_cwalk (&addrset_treedef, &as->mcaddrs, addrset_forall_helper, &arg1);
-  count = ddsrt_avl_ccount (&as->mcaddrs);
+  addrset_snapshot_begin (&s, &tree, 1);
   UNLOCK (as);
+  addrset_snapshot_apply (&s, f, arg);
+  const size_t count = s.n;
+  addrset_snapshot_end (&s);
   return count;
 }
 
