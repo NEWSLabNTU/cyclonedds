@@ -22,6 +22,13 @@
 #include "dds/ddsrt/sync/freertos.h"
 #elif DDSRT_WITH_THREADX
 #include "dds/ddsrt/sync/threadx.h"
+/* nano-ros issue 0496: Zephyr has a POSIX layer, but its pthread mutexes and
+   condvars come from fixed static pools, which made cyclone's per-entity locks a
+   compile-time cap on graph size. Selected by the consumer's config.h (see
+   nano-ros zephyr/cyclonedds-config), not by __ZEPHYR__ alone, so a Zephyr build
+   that wants the POSIX behaviour can still have it. */
+#elif DDSRT_WITH_ZEPHYR
+#include "dds/ddsrt/sync/zephyr.h"
 #elif _WIN32
 #include "dds/ddsrt/sync/windows.h"
 #elif __SunOS_5_6
