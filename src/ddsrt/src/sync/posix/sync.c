@@ -11,6 +11,7 @@
  */
 #include <assert.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -20,15 +21,49 @@
 #include "dds/ddsrt/sync.h"
 #include "dds/ddsrt/time.h"
 
+#ifdef __ZEPHYR__
+#include <zephyr/kernel.h>
+#endif
+
+/* nano-ros: name the failing object instead of dying anonymously — issue 0371.
+ *
+ * Zephyr's pthread_{mutex,cond,rwlock}_init allocate from fixed pools
+ * (CONFIG_MAX_PTHREAD_*_COUNT) and return ENOMEM once one is exhausted.
+ * Discarding that return does not avoid the crash, it only displaces it: the
+ * handle is left as PTHREAD_*_INITIALIZER, and the first lock on it fails
+ * EINVAL and reaches one of the bare abort()s below — typically seconds later,
+ * on another thread, in an unrelated function, with nothing logged. That is
+ * exactly how issue 0371 presented: a native_sim image died ~19 s into a large
+ * Autoware graph with a bare "ZEPHYR FATAL ERROR 4" and no diagnostic.
+ *
+ * These pools are a real ceiling rather than a theoretical one, because cyclone
+ * takes one pool object per proxy entity AND one per addrset — so demand scales
+ * with the size of the graph being joined, not with the local participant. The
+ * message therefore has to say which pool ran out. */
+static void sync_init_failed (const char *what, const char *knob, int err)
+{
+#ifdef __ZEPHYR__
+  printk ("ddsrt: pthread_%s_init failed (%d)\n", what, err);
+  if (err == ENOMEM)
+    printk ("ddsrt: the Zephyr POSIX %s pool is exhausted -- raise %s\n", what, knob);
+#else
+  (void) knob;
+  fprintf (stderr, "ddsrt: pthread_%s_init failed (%d)\n", what, err);
+  fflush (stderr);
+#endif
+  abort ();
+}
+
 void ddsrt_mutex_init (ddsrt_mutex_t *mutex)
 {
+  int err;
   assert (mutex != NULL);
   /* nano-ros phase-292 W2 — on Zephyr the pthread mutex pool
    * (CONFIG_MAX_PTHREAD_MUTEX_COUNT) is finite; a silent init failure
    * here surfaces later as an abort() in ddsrt_mutex_lock with no
    * indication of the real cause. Fail loudly at the failure site. */
-  if (pthread_mutex_init (&mutex->mutex, NULL) != 0)
-    abort();
+  if ((err = pthread_mutex_init (&mutex->mutex, NULL)) != 0)
+    sync_init_failed ("mutex", "CONFIG_MAX_PTHREAD_MUTEX_COUNT", err);
 }
 
 void ddsrt_mutex_destroy (ddsrt_mutex_t *mutex)
@@ -71,9 +106,11 @@ ddsrt_mutex_unlock (ddsrt_mutex_t *mutex)
 void
 ddsrt_cond_init (ddsrt_cond_t *cond)
 {
+  int err;
   assert (cond != NULL);
 
-  pthread_cond_init (&cond->cond, NULL);
+  if ((err = pthread_cond_init (&cond->cond, NULL)) != 0)
+    sync_init_failed ("cond", "CONFIG_MAX_PTHREAD_COND_COUNT", err);
 }
 
 void
@@ -161,15 +198,16 @@ ddsrt_cond_broadcast (ddsrt_cond_t *cond)
 void
 ddsrt_rwlock_init (ddsrt_rwlock_t *rwlock)
 {
+  int err;
   assert(rwlock != NULL);
 
 #if __SunOS_5_6
-  if (pthread_mutex_init(&rwlock->rwlock, NULL) != 0)
-    abort();
+  if ((err = pthread_mutex_init(&rwlock->rwlock, NULL)) != 0)
+    sync_init_failed ("mutex", "CONFIG_MAX_PTHREAD_MUTEX_COUNT", err);
 #else
   /* process-shared attribute is set to PTHREAD_PROCESS_PRIVATE by default */
-  if (pthread_rwlock_init(&rwlock->rwlock, NULL) != 0)
-    abort();
+  if ((err = pthread_rwlock_init(&rwlock->rwlock, NULL)) != 0)
+    sync_init_failed ("rwlock", "CONFIG_MAX_PTHREAD_RWLOCK_COUNT", err);
 #endif
 }
 
