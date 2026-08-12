@@ -13,12 +13,37 @@
 #include "dds/ddsrt/time.h"
 #include "dds/ddsrt/time/threadx.h"
 
+/* nano-ros issue 0508 — say what could not be created before dying.
+ *
+ * These sites used to `abort()` with nothing logged. That is already better
+ * than the POSIX port's old behaviour (issue 0371: a discarded return
+ * displaced the crash by twenty seconds into an unrelated function), because
+ * the stack names the init function -- but a reader still has to guess which
+ * object and which ThreadX status.
+ *
+ * ONE helper rather than a message per site, for the reason issue 0508 records:
+ * the POSIX port had three init sites, and fixing them separately would have
+ * produced three spellings of the same sentence.
+ *
+ * `DDS_FATAL` is what this file already uses for an unrecoverable sync failure
+ * (see `ddsrt_mutex_lock` below), so this needs no facility the port did not
+ * already depend on. `dds_log` aborts whenever the category includes
+ * DDS_LC_FATAL, after the sink call and independent of the configured log
+ * level, so the abort these sites made explicitly still happens.
+ */
+static void sync_init_failed(const char *what, UINT status)
+{
+  DDS_FATAL("ddsrt_%s_init: ThreadX create failed (status %u)\n", what, (unsigned) status);
+}
+
 void ddsrt_mutex_init(ddsrt_mutex_t *mutex)
 {
+  UINT status;
+
   assert(mutex != NULL);
   (void) memset(mutex, 0, sizeof(*mutex));
-  if (tx_mutex_create(&mutex->mutex, (CHAR *)"ddsrt_mutex", TX_INHERIT) != TX_SUCCESS) {
-    abort();
+  if ((status = tx_mutex_create(&mutex->mutex, (CHAR *)"ddsrt_mutex", TX_INHERIT)) != TX_SUCCESS) {
+    sync_init_failed("mutex", status);
   }
 }
 
@@ -53,12 +78,17 @@ void ddsrt_mutex_unlock(ddsrt_mutex_t *mutex)
 
 void ddsrt_cond_init(ddsrt_cond_t *cond)
 {
+  UINT status;
+
   assert(cond != NULL);
   (void) memset(cond, 0, sizeof(*cond));
-  if (tx_semaphore_create(&cond->sem, (CHAR *)"ddsrt_cond", 0) != TX_SUCCESS ||
-      tx_mutex_create(&cond->lock, (CHAR *)"ddsrt_cond_lock", TX_INHERIT) != TX_SUCCESS)
-  {
-    abort();
+  /* Split from one `||` so the message names WHICH of the two objects failed;
+   * the short-circuit behaviour is unchanged. */
+  if ((status = tx_semaphore_create(&cond->sem, (CHAR *)"ddsrt_cond", 0)) != TX_SUCCESS) {
+    sync_init_failed("cond semaphore", status);
+  }
+  if ((status = tx_mutex_create(&cond->lock, (CHAR *)"ddsrt_cond_lock", TX_INHERIT)) != TX_SUCCESS) {
+    sync_init_failed("cond mutex", status);
   }
 }
 
@@ -136,10 +166,12 @@ void ddsrt_cond_broadcast(ddsrt_cond_t *cond)
 
 void ddsrt_rwlock_init(ddsrt_rwlock_t *rwlock)
 {
+  UINT status;
+
   assert(rwlock != NULL);
   (void) memset(rwlock, 0, sizeof(*rwlock));
-  if (tx_mutex_create(&rwlock->mutex, (CHAR *)"ddsrt_rwlock", TX_INHERIT) != TX_SUCCESS) {
-    abort();
+  if ((status = tx_mutex_create(&rwlock->mutex, (CHAR *)"ddsrt_rwlock", TX_INHERIT)) != TX_SUCCESS) {
+    sync_init_failed("rwlock", status);
   }
 }
 

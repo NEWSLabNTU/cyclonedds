@@ -21,6 +21,24 @@
 #include "dds/ddsrt/sync.h"
 #include "dds/ddsrt/time.h"
 
+/* nano-ros issue 0508 — say what could not be created before dying.
+ *
+ * See the same helper in `sync/threadx/sync.c` for the rationale (one helper,
+ * not a message per site; `DDS_FATAL` because this file already uses it for an
+ * unrecoverable sync failure, and it aborts regardless of log level).
+ *
+ * FreeRTOS differs from ThreadX in what there is to report: neither
+ * `xSemaphoreCreateMutex` nor `ddsrt_tasklist_init` returns a status code, and
+ * both fail for one reason -- no memory. `xSemaphoreCreateMutex` allocates its
+ * control block from the FreeRTOS heap (`configTOTAL_HEAP_SIZE`) and the task
+ * list from ddsrt's, so the object name is the diagnostic: it says which of the
+ * two heaps to look at.
+ */
+static void sync_init_failed(const char *what, const char *object)
+{
+  DDS_FATAL("ddsrt_%s_init: could not create %s -- out of memory\n", what, object);
+}
+
 void ddsrt_mutex_init(ddsrt_mutex_t *mutex)
 {
   SemaphoreHandle_t sem;
@@ -28,7 +46,7 @@ void ddsrt_mutex_init(ddsrt_mutex_t *mutex)
   assert(mutex != NULL);
 
   if ((sem = xSemaphoreCreateMutex()) == NULL) {
-    abort();
+    sync_init_failed("mutex", "the FreeRTOS mutex semaphore");
   }
 
   (void)memset(mutex, 0, sizeof(*mutex));
@@ -137,11 +155,11 @@ void ddsrt_cond_init(ddsrt_cond_t *cond)
   assert(cond != NULL);
 
   if (ddsrt_tasklist_init(&tasks) == -1) {
-    abort();
+    sync_init_failed("cond", "the waiting-task list");
   }
   if ((sem = xSemaphoreCreateMutex()) == NULL) {
     ddsrt_tasklist_fini(&tasks);
-    abort();
+    sync_init_failed("cond", "the FreeRTOS mutex semaphore");
   }
 
   (void)memset(cond, 0, sizeof(*cond));
@@ -257,11 +275,11 @@ void ddsrt_rwlock_init(ddsrt_rwlock_t *rwlock)
   assert(rwlock != NULL);
 
   if (ddsrt_tasklist_init(&tasks) == -1) {
-    abort();
+    sync_init_failed("rwlock", "the waiting-task list");
   }
   if ((sem = xSemaphoreCreateMutex()) == NULL) {
     ddsrt_tasklist_fini(&tasks);
-    abort();
+    sync_init_failed("rwlock", "the FreeRTOS mutex semaphore");
   }
 
   memset(rwlock, 0, sizeof(*rwlock));
