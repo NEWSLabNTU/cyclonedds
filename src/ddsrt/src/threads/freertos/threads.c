@@ -19,6 +19,20 @@
 #include "dds/ddsrt/string.h"
 #include "dds/ddsrt/sync.h"
 
+/* nano-ros: for lwip_socket_thread_{init,cleanup} in thread_start_routine —
+   see the comment there.
+
+   AFTER the ddsrt headers on purpose: `DDSRT_WITH_LWIP` comes from
+   `dds/config.h`, which they pull in. Placed before them, this guard evaluates
+   an UNDEFINED macro as 0, the lwIP headers never arrive, and then
+   `LWIP_NETCONN_SEM_PER_THREAD` is also undefined — so the call site below
+   compiles out too and the whole fix is silently absent. It built and ran
+   exactly as before. */
+#if DDSRT_WITH_LWIP
+#include "lwip/opt.h"
+#include "lwip/sockets.h"
+#endif
+
 typedef enum {
   THREAD_STARTING = 0,
   THREAD_RUNNING,
@@ -353,7 +367,27 @@ thread_start_routine(void *arg)
 #if !DDSRT_WITH_FREERTOS
   thread_context = ctx;
 #endif
+
+#if DDSRT_WITH_LWIP && LWIP_NETCONN_SEM_PER_THREAD
+  /* nano-ros: with LWIP_NETCONN_SEM_PER_THREAD, every thread that touches the
+     socket API needs its own netconn semaphore, allocated by
+     lwip_socket_thread_init(). ddsrt's threads (the receive thread, the gc
+     thread, the transmit threads) all use lwIP sockets and none of them called
+     it, so the FIRST socket call from a ddsrt thread hit
+     `LWIP_ASSERT("sem != NULL")` inside sys_arch_netconn_sem_get().
+
+     The application's own task is initialized by the board's network bring-up;
+     these are the threads Cyclone creates itself, which the board cannot see.
+     Doing it here rather than in each ddsrt thread body covers them all at the
+     one point they have in common. */
+  lwip_socket_thread_init();
+#endif
+
   ret = ctx->func(ctx->arg);
+
+#if DDSRT_WITH_LWIP && LWIP_NETCONN_SEM_PER_THREAD
+  lwip_socket_thread_cleanup();
+#endif
 
   thread_fini(ctx, ret); /* DO NOT DEREFERENCE THREAD CONTEXT ANYMORE! */
 
