@@ -218,7 +218,10 @@ void ddsrt_atomics_fini (void) { }
    something else will have to be done. */
 #define N_MUTEXES_LG2 4
 #define N_MUTEXES     (1 << N_MUTEXES_LG2)
-#ifndef PTHREAD_MUTEX_INITIALIZER
+/* Zephyr defines PTHREAD_MUTEX_INITIALIZER even when ddsrt is built on the
+   native k_mutex backend, where ddsrt_mutex_t is not a pthread mutex at all --
+   exactly the case the comment above anticipates. Initialise at runtime there. */
+#if !defined(PTHREAD_MUTEX_INITIALIZER) || defined(DDSRT_WITH_ZEPHYR)
 static ddsrt_mutex_t mutexes[N_MUTEXES];
 
 void ddsrt_atomics_init (void)
