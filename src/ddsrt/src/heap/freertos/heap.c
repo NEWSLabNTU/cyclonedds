@@ -22,6 +22,13 @@
 #include <string.h>
 #include "dds/ddsrt/heap.h"
 
+/* nano-ros (issue 0832): this port's heap is compiled out when the tree is
+   built with -DNROS_DDSRT_PLATFORM_FUNNEL. Cyclone links above nano-ros's
+   platform layer, so every ddsrt allocation goes to
+   `nros_platform_{alloc,realloc,dealloc}` instead, implemented once in
+   ../nros/heap.c rather than once per port. Undefined — every standalone
+   cyclone build — this file is stock and live. */
+#ifndef NROS_DDSRT_PLATFORM_FUNNEL
 /*
  * FreeRTOS heap_4 returns portBYTE_ALIGNMENT-aligned blocks. Keep the
  * ddsrt size header inside an equally aligned prefix so the pointer
@@ -142,3 +149,5 @@ ddsrt_free(void *ptr)
     vPortFree((unsigned char *) ptr - ofst);
   }
 }
+
+#endif /* !NROS_DDSRT_PLATFORM_FUNNEL */

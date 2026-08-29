@@ -80,6 +80,15 @@ set(headers
   "${source_dir}/include/dds/ddsrt/align.h")
 
 set(sources
+  # nano-ros (issue 0832): THE ddsrt heap when -DNROS_DDSRT_PLATFORM_FUNNEL is
+  # defined; empty otherwise, when each port's own heap.c is live instead. In
+  # the COMMON list rather than swapped into the per-port branches below on
+  # purpose: `ddsrt` is INTERFACE and `ddsrt-internal` compiles the same
+  # INTERFACE_SOURCES, so a swap would hand the funnel to the host tools
+  # (idlc, confgen) that link no platform layer. The switch is a PRIVATE
+  # compile definition on `ddsc`, so it reaches the library and not the tools,
+  # and both see the same file set.
+  "${source_dir}/src/heap/nros/heap.c"
   "${source_dir}/src/atomics.c"
   "${source_dir}/src/avl.c"
   "${source_dir}/src/bswap.c"
