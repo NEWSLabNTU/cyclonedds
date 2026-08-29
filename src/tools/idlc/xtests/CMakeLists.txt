@@ -34,11 +34,11 @@ set(_sources
   test_struct_inherit_mutable_keys.idl
 )
 
-set(_includes "${_includes}\\;${CMAKE_SOURCE_DIR}/src/core/ddsc/include")
-set(_includes "${_includes}\\;${CMAKE_SOURCE_DIR}/src/core/ddsi/include")
-set(_includes "${_includes}\\;${CMAKE_SOURCE_DIR}/src/ddsrt/include")
-set(_includes "${_includes}\\;${CMAKE_BINARY_DIR}/src/ddsrt/include")
-set(_includes "${_includes}\\;${CMAKE_BINARY_DIR}/src/core/include")
+set(_includes "${_includes}\\;${CycloneDDS_SOURCE_DIR}/src/core/ddsc/include")
+set(_includes "${_includes}\\;${CycloneDDS_SOURCE_DIR}/src/core/ddsi/include")
+set(_includes "${_includes}\\;${CycloneDDS_SOURCE_DIR}/src/ddsrt/include")
+set(_includes "${_includes}\\;${CycloneDDS_BINARY_DIR}/src/ddsrt/include")
+set(_includes "${_includes}\\;${CycloneDDS_BINARY_DIR}/src/core/include")
 set(_includes "${_includes}\\;${CMAKE_CURRENT_SOURCE_DIR}")
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
