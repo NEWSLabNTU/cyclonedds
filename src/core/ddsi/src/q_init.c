@@ -1107,7 +1107,7 @@ static int iceoryx_init (struct ddsi_domaingv *gv)
   ddsrt_asprintf (&sptr, "iceoryx_rt_%"PRIdPID"_%"PRId64, ddsrt_getpid (), gv->tstart.v);
   GVLOG (DDS_LC_SHM, "Current process name for iceoryx is %s\n", sptr);
   iox_runtime_init (sptr);
-  free(sptr);
+  ddsrt_free(sptr);
 
   // FIXME: this can be done more elegantly when properly supporting multiple transports
   if (ddsi_vnet_init (gv, "iceoryx", NN_LOCATOR_KIND_SHEM) < 0)
