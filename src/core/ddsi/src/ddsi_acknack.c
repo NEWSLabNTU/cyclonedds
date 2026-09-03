@@ -508,12 +508,29 @@ struct nn_xmsg *make_and_resched_acknack (struct xevent *ev, struct ddsi_proxy_w
        eventually. */
       (void) resched_xevent_if_earlier (ev, ddsrt_mtime_add_duration (tnow, gv->config.auto_resched_nack_delay));
       break;
-    case AANR_SUPPRESSED_NACK:
+    case AANR_SUPPRESSED_NACK: {
       rwn->ack_requested = 0;
       rwn->t_last_ack = tnow;
       rwn->last_nack.seq_base = nack_summary.seq_base;
-      (void) resched_xevent_if_earlier (ev, ddsrt_mtime_add_duration (rwn->t_last_nack, gv->config.nack_delay));
+      /* Re-arm no EARLIER than now.
+         Every other case here sets `t_last_nack = tnow` before rescheduling;
+         this one does not, so `t_last_nack + nack_delay` is derived from
+         whenever a NACK was last actually SENT and can be arbitrarily far in
+         the past.  `resched_xevent_if_earlier` accepts it -- anything is
+         earlier than DDS_NEVER -- so the event returns to the heap already
+         overdue, `handle_xevents`' `while (earliest_in_xeventq <= tnow)`
+         extracts it on the next iteration, this case is reached again, and the
+         same constant is recomputed.  The result is a livelock that spins the
+         event thread while holding evq->lock, so every thread needing the event
+         queue is stuck behind it.
+         Upstream fixed this the same way in 11.x; keeping the shape identical
+         so the eventual uplift drops this hunk cleanly. */
+      ddsrt_mtime_t tsched = ddsrt_mtime_add_duration (rwn->t_last_nack, gv->config.nack_delay);
+      if (tsched.v < tnow.v)
+        tsched = ddsrt_mtime_add_duration (tnow, gv->config.nack_delay);
+      (void) resched_xevent_if_earlier (ev, tsched);
       break;
+    }
   }
   GVTRACE ("send acknack(rd "PGUIDFMT" -> pwr "PGUIDFMT")\n", PGUID (rwn->rd_guid), PGUID (pwr->e.guid));
   return msg;
