@@ -161,6 +161,16 @@ ddsrt_thread_setname(const char *__restrict name)
 #endif
 #elif defined(__QNXNTO__)
   (void)pthread_setname_np(pthread_self(), name);
+#elif defined(__ZEPHYR__)
+  /* Zephyr's POSIX layer provides the Linux-shaped two-argument form, which
+     forwards to k_thread_name_set. Without this the #else below applies and
+     every Cyclone thread is anonymous in the kernel's thread table: a thread
+     analyzer dump or a CTF trace shows a bare stack address where the name
+     should be, and the recv/gc/tev threads can only be told apart by hand.
+
+     Names are truncated to CONFIG_THREAD_MAX_NAME_LEN (32 by default), which
+     is comfortably above every name Cyclone uses. */
+  (void)pthread_setname_np(pthread_self(), name);
 #else
   /* VxWorks does not support the task name to be set after a task is created.
      Setting the name of a task can be done through pthread_attr_setname. */
