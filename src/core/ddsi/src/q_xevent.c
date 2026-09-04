@@ -384,6 +384,17 @@ void delete_xevent_callback (struct xevent *ev)
   free_xevent (evq, ev);
 }
 
+int xevent_is_scheduled (struct xevent *ev)
+{
+  struct xeventq *evq = ev->evq;
+  int is_scheduled;
+  ddsrt_mutex_lock (&evq->lock);
+  // Also considers it scheduled if it is about to be deleted
+  is_scheduled = (ev->tsched.v != DDS_NEVER);
+  ddsrt_mutex_unlock (&evq->lock);
+  return is_scheduled;
+}
+
 int resched_xevent_if_earlier (struct xevent *ev, ddsrt_mtime_t tsched)
 {
   struct xeventq *evq = ev->evq;

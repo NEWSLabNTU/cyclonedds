@@ -63,6 +63,12 @@ DDS_EXPORT void delete_xevent (struct xevent *ev);
 DDS_EXPORT void delete_xevent_callback (struct xevent *ev);
 DDS_EXPORT int resched_xevent_if_earlier (struct xevent *ev, ddsrt_mtime_t tsched);
 
+/* Is this event on the queue?  A fired event is OFF the heap until its handler
+   re-arms or deletes it, and nothing enforces that it does either -- this is
+   what lets a caller assert the invariant.  Also answers true for an event
+   marked for deletion. */
+DDS_EXPORT int xevent_is_scheduled (struct xevent *ev);
+
 DDS_EXPORT struct xevent *qxev_heartbeat (struct xeventq *evq, ddsrt_mtime_t tsched, const ddsi_guid_t *wr_guid);
 DDS_EXPORT struct xevent *qxev_acknack (struct xeventq *evq, ddsrt_mtime_t tsched, const ddsi_guid_t *pwr_guid, const ddsi_guid_t *rd_guid);
 DDS_EXPORT struct xevent *qxev_spdp (struct xeventq *evq, ddsrt_mtime_t tsched, const ddsi_guid_t *pp_guid, const ddsi_guid_t *proxypp_guid);

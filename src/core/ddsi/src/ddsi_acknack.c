@@ -384,6 +384,23 @@ void sched_acknack_if_needed (struct xevent *ev, struct ddsi_proxy_writer *pwr, 
     (void) resched_xevent_if_earlier (ev, tnow);
 }
 
+#ifndef NDEBUG
+static bool need_to_eventually_nack (enum add_AckNack_result aanr)
+{
+  switch (aanr)
+  {
+    case AANR_SUPPRESSED_ACK:
+    case AANR_ACK:
+      return false;
+    case AANR_NACK:
+    case AANR_NACKFRAG_ONLY:
+    case AANR_SUPPRESSED_NACK:
+      break;
+  }
+  return true;
+}
+#endif
+
 struct nn_xmsg *make_and_resched_acknack (struct xevent *ev, struct ddsi_proxy_writer *pwr, struct ddsi_pwr_rd_match *rwn, ddsrt_mtime_t tnow, bool avoid_suppressed_nack)
 {
   struct ddsi_domaingv * const gv = pwr->e.gv;
@@ -533,5 +550,12 @@ struct nn_xmsg *make_and_resched_acknack (struct xevent *ev, struct ddsi_proxy_w
     }
   }
   GVTRACE ("send acknack(rd "PGUIDFMT" -> pwr "PGUIDFMT")\n", PGUID (rwn->rd_guid), PGUID (pwr->e.guid));
+  /* Backport of upstream 11.x's invariant: if this reader still needs to NACK,
+     the event MUST still be scheduled.  handle_xevents extracts an event and
+     stamps tsched = DDS_NEVER before calling the handler, so re-arming is
+     entirely the handler's responsibility and nothing else checks it -- a path
+     that returns without rescheduling or deleting drops the event out of the
+     queue silently, and the symptom appears much later and somewhere else. */
+  assert (!need_to_eventually_nack (aanr) || xevent_is_scheduled (ev));
   return msg;
 }
