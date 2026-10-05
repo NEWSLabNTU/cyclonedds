@@ -16,6 +16,7 @@
 #include "dds/ddsrt/heap.h"
 #include "dds/ddsrt/sockets.h"
 #include "dds/ddsrt/sync.h"
+#include "dds/ddsrt/time.h"
 
 #include "dds/ddsi/q_sockwaitset.h"
 #include "dds/ddsi/ddsi_config_impl.h"
@@ -544,6 +545,7 @@ struct os_sockWaitset
   int fdmax_plus_1;              /* value for first parameter of select() */
   os_sockWaitsetSet set;         /* set of descriptors handled next */
   struct os_sockWaitsetCtx ctx;  /* set of descriptors being handled  */
+  uint32_t select_failures;      /* consecutive failed selects (nano-ros issue 1696) */
 };
 
 #if defined (_WIN32)
@@ -699,6 +701,7 @@ os_sockWaitset os_sockWaitsetNew (void)
 
   os_sockWaitsetNewSet (&ws->set);
   os_sockWaitsetNewCtx (&ws->ctx);
+  ws->select_failures = 0;
 
 #if ! defined (_WIN32)
   ws->fdmax_plus_1 = 0;
@@ -927,10 +930,24 @@ os_sockWaitsetCtx os_sockWaitsetWait (os_sockWaitset ws)
     rc = ddsrt_select (fdmax, rdset, NULL, NULL, DDS_INFINITY);
     if (rc < 0 && rc != DDS_RETCODE_INTERRUPTED && rc != DDS_RETCODE_TRY_AGAIN)
     {
-      DDS_WARNING("os_sockWaitsetWait: select failed, retcode = %"PRId32, rc);
+      /* nano-ros issue 1696: the receive thread calls straight back in, so a
+         PERSISTENT failure used to log and retry without limit -- one Zephyr
+         image's console reached 91 GB, burying the first line that named the
+         cause. Log the first failure and then each power-of-two count, and
+         back off (1 ms doubling to 1 s) before handing back to the caller. */
+      const uint32_t n = ++ws->select_failures;
+      if ((n & (n - 1)) == 0)
+        DDS_WARNING("os_sockWaitsetWait: select failed, retcode = %"PRId32" (%"PRIu32" consecutive)\n", rc, n);
+      dds_sleepfor (DDS_MSECS (n >= 11 ? 1000 : (1 << (n - 1))));
       break;
     }
   } while (rc < 0);
+
+  if (rc >= 0 && ws->select_failures > 0)
+  {
+    DDS_WARNING("os_sockWaitsetWait: select recovered after %"PRIu32" consecutive failures\n", ws->select_failures);
+    ws->select_failures = 0;
+  }
 
   if (rc > 0)
   {
