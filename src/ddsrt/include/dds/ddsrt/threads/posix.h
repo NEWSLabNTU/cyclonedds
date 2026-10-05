@@ -64,6 +64,15 @@ typedef uintptr_t ddsrt_tid_t;
 /* Wrapped in a struct to force conformation to abstraction. */
 typedef struct {
     pthread_t v;
+#if defined(__ZEPHYR__)
+    /* Zephyr's pthread_create runs the thread on the stack the ATTR holds, and
+       its contract is that the caller destroys the attr only after the thread
+       is done: destroying it right after create (the POSIX idiom) frees the
+       running thread's stack, which the kernel refuses with "tid ... is in
+       use!" and the stack leaks. So the attr travels with the thread and is
+       destroyed after pthread_join (nano-ros issue 1698). */
+    pthread_attr_t attr;
+#endif
 } ddsrt_thread_t;
 
 #if defined (__cplusplus)

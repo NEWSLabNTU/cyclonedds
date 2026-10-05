@@ -350,7 +350,12 @@ ddsrt_thread_create (
     goto err_create;
   }
   sigprocmask (SIG_SETMASK, &oset, NULL);
+#if defined(__ZEPHYR__)
+  /* The thread runs on the attr's stack: destroy it after the join, not now. */
+  threadptr->attr = attr;
+#else
   pthread_attr_destroy (&attr);
+#endif
   return DDS_RETCODE_OK;
 
 err_create:
@@ -395,7 +400,9 @@ ddsrt_gettid_for_thread( ddsrt_thread_t thread)
 ddsrt_thread_t
 ddsrt_thread_self(void)
 {
-  ddsrt_thread_t id = {.v = pthread_self ()};
+  ddsrt_thread_t id;
+  memset (&id, 0, sizeof (id));
+  id.v = pthread_self ();
   return id;
 }
 
@@ -418,6 +425,12 @@ ddsrt_thread_join(ddsrt_thread_t thread, uint32_t *thread_result)
     DDS_ERROR ("pthread_join(0x%"PRIxMAX") failed with error %d\n", (uintmax_t)((uintptr_t)thread.v), err);
     return DDS_RETCODE_ERROR;
   }
+
+#if defined(__ZEPHYR__)
+  /* The thread is dead (Zephyr's pthread_join waits in k_thread_join), so its
+     stack can go now. A zeroed attr (ddsrt_thread_self) is refused, harmlessly. */
+  (void) pthread_attr_destroy (&thread.attr);
+#endif
 
   if (thread_result)
     *thread_result = (uint32_t) ((uintptr_t) vthread_result);
