@@ -39,16 +39,33 @@ typedef struct {
 } log_sink_t;
 
 /*
- * ThreadX/RISC-V runs without C runtime TLS setup for application
- * threads. A __thread log buffer resolves through an invalid TLS base
- * there, so snprintf writes through bogus addresses during early
- * participant initialization. Cyclone serializes log emission with the
- * sink lock below, making a process-global scratch buffer safe for the
- * ThreadX port.
+ * Ports whose application threads have no per-thread TLS cannot keep this
+ * buffer per thread, and on them the buffer is ONE object shared by every
+ * thread:
+ *
+ * - ThreadX/RISC-V runs without C runtime TLS setup for application
+ *   threads. A __thread log buffer resolves through an invalid TLS base
+ *   there, so snprintf writes through bogus addresses during early
+ *   participant initialization.
+ * - FreeRTOS on a bare-metal newlib toolchain compiles __thread as GCC
+ *   emulated TLS, and newlib's gthreads are single-threaded
+ *   (__gthread_active_p () is 0), so __emutls_get_address hands every task
+ *   the same object. It was already shared; it just did not say so.
+ *
+ * A shared buffer is only safe if emission is EXCLUSIVE, and the sink lock
+ * vlog takes is a READ lock, which both ports implement as genuinely shared.
+ * Two threads tracing at once append to the same `pos`; once it passes the
+ * end of `buf`, `sizeof (buf) - pos` wraps and vsnprintf writes without a
+ * bound into whatever follows the buffer. Measured on QEMU mps3-an536 /
+ * FreeRTOS (nano-ros issue 0997): interleaved trace lines, then heap_4
+ * asserting on a freed xevent and on a corrupted queue. So on these ports
+ * vlog takes the sink lock for writing.
  */
-#if DDSRT_WITH_THREADX
+#if DDSRT_WITH_THREADX || DDSRT_WITH_FREERTOS
+#define LOG_BUFFER_IS_SHARED 1
 static log_buffer_t log_buffer;
 #else
+#define LOG_BUFFER_IS_SHARED 0
 static ddsrt_thread_local log_buffer_t log_buffer;
 #endif
 
@@ -315,7 +332,8 @@ static void vlog1 (const struct ddsrt_log_cfg_impl *cfg, uint32_t cat, uint32_t 
 
 static void vlog (const struct ddsrt_log_cfg_impl *cfg, uint32_t cat, uint32_t domid, const char *file, uint32_t line, const char *func, const char *fmt, va_list ap)
 {
-  lock_sink (RDLOCK);
+  /* The buffer is per thread unless LOG_BUFFER_IS_SHARED; see above. */
+  lock_sink (LOG_BUFFER_IS_SHARED ? WRLOCK : RDLOCK);
   vlog1 (cfg, cat, domid, file, line, func, fmt, ap);
   unlock_sink ();
   if (cat & DDS_LC_FATAL)
