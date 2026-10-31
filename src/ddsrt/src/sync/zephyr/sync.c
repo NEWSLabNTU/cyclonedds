@@ -136,6 +136,18 @@ bool ddsrt_cond_waituntil (ddsrt_cond_t *cond, ddsrt_mutex_t *mutex, dds_time_t 
   }
 
   const int err = k_condvar_wait (&cond->cond, &mutex->mutex, timeout);
+  /* POSIX returns from a timed wait holding the mutex whatever the outcome,
+     and every caller here unlocks next. Zephyr 3.7's k_condvar_wait did too;
+     from 4.x it re-takes the mutex only when woken, so a timeout (or K_NO_WAIT)
+     returns it UNLOCKED and the caller's unlock aborts with -EINVAL. Re-take it
+     only if this thread is not already the owner: k_mutex is recursive, so an
+     unconditional lock on 3.7 would leave it held once the caller unlocks. */
+  if (mutex->mutex.owner != k_current_get ())
+  {
+    int lerr;
+    if ((lerr = k_mutex_lock (&mutex->mutex, K_FOREVER)) != 0)
+      sync_fatal ("k_mutex_lock(after timed wait)", lerr);
+  }
   if (err == 0)
     return true;
   if (err == -EAGAIN)
