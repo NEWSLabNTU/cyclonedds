@@ -141,6 +141,17 @@ static bool equal_generic (const void *srcx, const void *srcy, size_t srcoff, co
 static dds_return_t fini_generic (void * __restrict dst, size_t * __restrict dstoff, struct flagset *flagset, uint64_t flag, const enum pserop * __restrict desc);
 static dds_return_t valid_generic (const void *src, size_t srcoff, const enum pserop * __restrict desc);
 
+/* The in-memory type of an XE1/XE2/XE3 field. Every such field is a C enum
+   (a policy kind with values 0..3), and the size of a C enum is the ABI's: it
+   is sizeof (unsigned) on the common hosted ABIs but 1 on arm-none-eabi, whose
+   AAPCS default is variable-size enums (Tag_ABI_enum_size "small"). Handling
+   these fields as "unsigned" read and wrote 4 bytes there: validation saw the
+   padding after the kind (or, for PRESENTATION, the two flags next to it) as
+   part of the value, and deserialisation wrote over them. An enum declared
+   here takes the same size as the policy-kind enums under either ABI, which
+   ddsi_plist_init_tables asserts. The wire representation stays 4 bytes. */
+typedef enum ddsi_pserop_enum { DDSI_PSEROP_ENUM_MAX_ = 255 } ddsi_pserop_enum_t;
+
 static size_t pserop_seralign(enum pserop op)
 {
   switch(op)
@@ -786,7 +797,7 @@ static size_t ser_generic_srcsize (const enum pserop * __restrict desc)
       case XSTOP: return (srcoff + srcalign - 1) & ~(srcalign - 1);
       case XO: SIMPLE (XO, ddsi_octetseq_t); break;
       case XS: SIMPLE (XS, const char *); break;
-      case XE1: case XE2: case XE3: SIMPLE (*desc, unsigned); break;
+      case XE1: case XE2: case XE3: SIMPLE (*desc, ddsi_pserop_enum_t); break;
       case Xs: SIMPLE (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: SIMPLE (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: SIMPLE (Xu, uint32_t); break;
@@ -831,7 +842,7 @@ static bool fini_generic_embeddable (void * __restrict dst, size_t * __restrict 
       case XSTOP: return freed;
       case XO: COMPLEX (XO, ddsi_octetseq_t, { ddsrt_free (x->value); freed = true; }, (void) 0); break;
       case XS: COMPLEX (XS, char *, { ddsrt_free (*x); freed = true; }, (void) 0); break;
-      case XE1: case XE2: case XE3: COMPLEX (*desc, unsigned, (void) 0, (void) 0); break;
+      case XE1: case XE2: case XE3: COMPLEX (*desc, ddsi_pserop_enum_t, (void) 0, (void) 0); break;
       case Xs: SIMPLE (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: SIMPLE (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: SIMPLE (Xu, uint32_t); break;
@@ -878,7 +889,7 @@ static size_t pserop_memalign (enum pserop op)
     case Xb: case Xbx2: case Xbx3: case Xbx4: case Xbx5: return 1;
     case Xo: case Xox2: return 1;
     case XbCOND: case XbPROP: return 1;
-    case XE1: case XE2: case XE3: return sizeof (uint32_t);
+    case XE1: case XE2: case XE3: return dds_alignof (ddsi_pserop_enum_t);
     case Xs: return sizeof (int16_t);
     case Xi: case Xix2: case Xix3: case Xix4: return sizeof (int32_t);
     case Xu: case Xux2: case Xux3: case Xux4: case Xux5: return sizeof (uint32_t);
@@ -927,12 +938,12 @@ static dds_return_t deser_generic_r (void * __restrict dst, size_t * __restrict 
         break;
       }
       case XE1: case XE2: case XE3: { /* enum with max allowed value */
-        unsigned * const x = deser_generic_dst (dst, dstoff, dds_alignof (int));
+        ddsi_pserop_enum_t * const x = deser_generic_dst (dst, dstoff, dds_alignof (ddsi_pserop_enum_t));
         const uint32_t maxval = 1 + (uint32_t) (*desc - XE1);
         uint32_t tmp;
         if (deser_uint32 (&tmp, dd, srcoff) < 0 || tmp > maxval)
           goto fail;
-        *x = (unsigned) tmp;
+        *x = (ddsi_pserop_enum_t) tmp;
         *dstoff += sizeof (*x);
         break;
       }
@@ -1133,7 +1144,7 @@ void plist_ser_generic_size_embeddable (size_t *dstoff, const void *src, size_t 
       case XSTOP: return;
       case XO: COMPLEX (XO, ddsi_octetseq_t, *dstoff = align4 (*dstoff) + 4 + x->length); break;
       case XS: COMPLEX (XS, const char *, *dstoff = align4 (*dstoff) + 4 + strlen (*x) + 1); break;
-      case XE1: case XE2: case XE3: COMPLEX (*desc, unsigned, *dstoff = align4 (*dstoff) + 4); break;
+      case XE1: case XE2: case XE3: COMPLEX (*desc, ddsi_pserop_enum_t, *dstoff = align4 (*dstoff) + 4); break;
       case Xs: SIMPLE2 (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: SIMPLE4 (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: SIMPLE4 (Xu, uint32_t); break;
@@ -1212,7 +1223,7 @@ dds_return_t plist_ser_generic_embeddable (char * const data, size_t *dstoff, co
         break;
       }
       case XE1: case XE2: case XE3: { /* enum */
-        unsigned const * const x = deser_generic_src (src, &srcoff, dds_alignof (unsigned));
+        ddsi_pserop_enum_t const * const x = deser_generic_src (src, &srcoff, dds_alignof (ddsi_pserop_enum_t));
         uint32_t * const p = ser_generic_align4 (data, dstoff);
         *p = ddsrt_toBO4u(bo, (uint32_t) *x);
         *dstoff += 4;
@@ -1385,7 +1396,7 @@ static dds_return_t unalias_generic (void * __restrict dst, size_t * __restrict 
         return 0;
       case XO: COMPLEX (XO, ddsi_octetseq_t, if (x->value) { x->value = ddsrt_memdup (x->value, x->length); }); break;
       case XS: COMPLEX (XS, char *, if (*x) { *x = ddsrt_strdup (*x); }); break;
-      case XE1: case XE2: case XE3: COMPLEX (*desc, unsigned, (void) 0); break;
+      case XE1: case XE2: case XE3: COMPLEX (*desc, ddsi_pserop_enum_t, (void) 0); break;
       case Xs: SIMPLE (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: SIMPLE (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: SIMPLE (Xu, uint32_t); break;
@@ -1480,7 +1491,7 @@ static dds_return_t valid_generic (const void *src, size_t srcoff, const enum ps
       case XSTOP: return 0;
       case XO: SIMPLE (XO, ddsi_octetseq_t, (x->length == 0) == (x->value == NULL)); break;
       case XS: SIMPLE (XS, const char *, *x != NULL); break;
-      case XE1: case XE2: case XE3: SIMPLE (*desc, unsigned, *x <= 1 + (unsigned) *desc - XE1); break;
+      case XE1: case XE2: case XE3: SIMPLE (*desc, ddsi_pserop_enum_t, (unsigned) *x <= 1 + (unsigned) *desc - XE1); break;
       case Xs: TRIVIAL (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: TRIVIAL (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: TRIVIAL (Xu, uint32_t); break;
@@ -1538,7 +1549,7 @@ static bool equal_generic (const void *srcx, const void *srcy, size_t srcoff, co
       case XS:
         SIMPLE (XS, const char *, strcmp (*x, *y) == 0);
         break;
-      case XE1: case XE2: case XE3: TRIVIAL (*desc, unsigned); break;
+      case XE1: case XE2: case XE3: TRIVIAL (*desc, ddsi_pserop_enum_t); break;
       case Xs: TRIVIAL (Xs, int16_t); break;
       case Xi: case Xix2: case Xix3: case Xix4: TRIVIAL (Xi, int32_t); break;
       case Xu: case Xux2: case Xux3: case Xux4: case Xux5: TRIVIAL (Xu, uint32_t); break;
@@ -1651,8 +1662,8 @@ static bool print_generic1 (char * __restrict *buf, size_t * __restrict bufsize,
         break;
       }
       case XE1: case XE2: case XE3: { /* enum */
-        unsigned const * const x = deser_generic_src (src, &srcoff, dds_alignof (unsigned));
-        if (!prtf (buf, bufsize, "%s%u", sep, *x))
+        ddsi_pserop_enum_t const * const x = deser_generic_src (src, &srcoff, dds_alignof (ddsi_pserop_enum_t));
+        if (!prtf (buf, bufsize, "%s%u", sep, (unsigned) *x))
           return false;
         srcoff += sizeof (*x);
         break;
@@ -2138,6 +2149,15 @@ static int piddesc_cmp_qos_addr (const void *va, const void *vb)
 
 static void ddsi_plist_init_tables_real (void)
 {
+  /* Every XE1/XE2/XE3 field is one of these enums; ddsi_pserop_enum_t must
+     have their in-memory size, whatever the ABI's enum size. */
+  DDSRT_STATIC_ASSERT (sizeof (dds_durability_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_history_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_liveliness_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_destination_order_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_ownership_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_presentation_access_scope_kind_t) == sizeof (ddsi_pserop_enum_t));
+  DDSRT_STATIC_ASSERT (sizeof (dds_ignorelocal_kind_t) == sizeof (ddsi_pserop_enum_t));
   /* make index of pid -> entry */
   for (size_t i = 0; i < sizeof (piddesc_vendor_index) / sizeof (piddesc_vendor_index[0]); i++)
   {
